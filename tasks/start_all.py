@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 async def check_redis_connection():
     """Verify Redis is available before starting agents"""
     try:
-        redis_client = redis.from_url(settings.REDIS_URL)
+        redis_client = redis.from_url(settings.get_redis_url())
         await redis_client.ping()
         await redis_client.close()
         logger.info("Redis connection verified")

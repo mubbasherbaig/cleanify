@@ -94,11 +94,8 @@ class MLSettings:
 class LLMSettings:
     """LLM advisor configuration"""
     ENABLE_LLM_ADVISOR: bool = False
-    MODEL_NAME: str = "microsoft/Phi-3-mini-4k-instruct"
-    MIN_MEMORY_GB: int = 20
-    DEVICE_MAP: str = "cpu"
-    LOAD_IN_4BIT: bool = True
-    MAX_NEW_TOKENS: int = 512
+    MODEL_NAME: str = "gpt-3.5-turbo"  # Changed from local model
+    MAX_NEW_TOKENS: int = 300  # Reduced for API efficiency
     TEMPERATURE: float = 0.7
     REQUEST_TIMEOUT_SEC: int = 30
 
@@ -194,17 +191,6 @@ class Settings:
     def _detect_capabilities(self):
         """Detect system capabilities and adjust settings"""
         
-        # Memory detection for LLM
-        total_memory_gb = psutil.virtual_memory().total / (1024**3)
-        
-        if total_memory_gb >= self.llm.MIN_MEMORY_GB and self.ENABLE_LLM_ADVISOR:
-            self.llm.ENABLE_LLM_ADVISOR = True
-            print(f"✅ LLM Advisor enabled - {total_memory_gb:.1f}GB RAM available")
-        else:
-            self.llm.ENABLE_LLM_ADVISOR = False
-            if self.ENABLE_LLM_ADVISOR:
-                print(f"⚠️ LLM Advisor disabled - insufficient RAM ({total_memory_gb:.1f}GB < {self.llm.MIN_MEMORY_GB}GB)")
-        
         # CPU detection for optimization
         cpu_count = psutil.cpu_count()
         if cpu_count >= 12:
@@ -217,6 +203,9 @@ class Settings:
             self.optimization.OPTIMIZATION_TIMEOUT_SEC = 30
             self.api.WORKERS = 1
         
+        # Memory detection for general system performance
+        total_memory_gb = psutil.virtual_memory().total / (1024**3)
+        
         # Adjust batch sizes based on available memory
         if total_memory_gb >= 32:
             self.MAX_BINS_TOTAL = 10000
@@ -227,6 +216,12 @@ class Settings:
         else:
             self.MAX_BINS_TOTAL = 1000
             self.tiling.MAX_BINS_PER_TILE = 25
+        
+        # LLM Advisor is now based on API availability, not local memory
+        if self.ENABLE_LLM_ADVISOR:
+            print(f"✅ LLM Advisor enabled via OpenAI API")
+        else:
+            print(f"⚠️ LLM Advisor disabled in settings")
         
         print(f"🔧 System capabilities: {cpu_count} CPUs, {total_memory_gb:.1f}GB RAM")
         print(f"   Max bins: {self.MAX_BINS_TOTAL}, Workers: {self.api.WORKERS}")

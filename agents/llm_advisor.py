@@ -1,11 +1,11 @@
 """
 Cleanify v2-alpha LLM Advisor Agent
-Optional CPU-only LLM for route choice suggestions using Phi-3-mini-4k-instruct
+Uses OpenAI GPT API for route choice suggestions
 """
 
 import asyncio
 import json
-import psutil
+import os
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 import warnings
@@ -14,11 +14,10 @@ import warnings
 warnings.filterwarnings("ignore")
 
 try:
-    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-    import torch
-    TRANSFORMERS_AVAILABLE = True
+    import openai
+    OPENAI_AVAILABLE = True
 except ImportError:
-    TRANSFORMERS_AVAILABLE = False
+    OPENAI_AVAILABLE = False
 
 from .base import AgentBase
 from core.models import LLMRecommendation
@@ -27,19 +26,15 @@ from core.settings import get_settings
 
 class LLMAdvisorAgent(AgentBase):
     """
-    LLM Advisor agent that provides intelligent route optimization suggestions
-    Feature-gated and only loads if sufficient memory is available
+    LLM Advisor agent that provides intelligent route optimization suggestions using OpenAI GPT
     """
     
     def __init__(self):
         super().__init__("llm_advisor", "llm_advisor")
         
-        # LLM state
-        self.model = None
-        self.tokenizer = None
-        self.llm_pipeline = None
+        # OpenAI client
+        self.openai_client = None
         self.model_loaded = False
-        self.model_loading = False
         
         # Request queue
         self.pending_requests: Dict[str, Dict[str, Any]] = {}
@@ -51,7 +46,7 @@ class LLMAdvisorAgent(AgentBase):
         # Performance metrics
         self.recommendations_generated = 0
         self.total_inference_time = 0.0
-        self.model_load_time = 0.0
+        self.api_errors = 0
         
         # Register handlers
         self._register_llm_handlers()
@@ -60,25 +55,30 @@ class LLMAdvisorAgent(AgentBase):
         """Initialize LLM advisor agent"""
         self.logger.info("Initializing LLM Advisor Agent")
         
-        # Check if LLM is enabled and system meets requirements
+        # Check if LLM is enabled
         if not self.settings.llm.ENABLE_LLM_ADVISOR:
             self.logger.info("LLM Advisor disabled in settings")
             return
         
-        if not TRANSFORMERS_AVAILABLE:
-            self.logger.warning("Transformers library not available")
+        if not OPENAI_AVAILABLE:
+            self.logger.warning("OpenAI library not available")
             return
         
-        # Check memory requirements
-        total_memory_gb = psutil.virtual_memory().total / (1024**3)
-        if total_memory_gb < self.settings.llm.MIN_MEMORY_GB:
-            self.logger.warning("Insufficient memory for LLM",
-                              available_gb=total_memory_gb,
-                              required_gb=self.settings.llm.MIN_MEMORY_GB)
+        # Initialize OpenAI client
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            self.logger.warning("OPENAI_API_KEY not found in environment")
             return
         
-        # Load model in background
-        asyncio.create_task(self._load_llm_model())
+        try:
+            openai.api_key = "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"
+            self.openai_client = openai
+            self.model_loaded = True
+            
+            self.logger.info("OpenAI client initialized successfully")
+            
+        except Exception as e:
+            self.logger.error("Failed to initialize OpenAI client", error=str(e))
         
         self.logger.info("LLM Advisor agent initialized")
     
@@ -101,38 +101,28 @@ class LLMAdvisorAgent(AgentBase):
     
     async def cleanup(self):
         """Cleanup LLM advisor agent"""
-        if self.model_loaded:
-            # Clear model from memory
-            del self.model
-            del self.tokenizer
-            del self.llm_pipeline
-            
-            # Force garbage collection
-            if TRANSFORMERS_AVAILABLE and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        
         self.logger.info("LLM Advisor agent cleanup")
     
     async def suggest_route_choice(self, stats_json: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Main LLM method: suggest route choice based on statistics
+        Main LLM method: suggest route choice based on statistics using OpenAI GPT
         """
         
         if not self.model_loaded:
             return {
                 "status": "error",
-                "message": "LLM model not loaded",
+                "message": "OpenAI client not initialized",
                 "fallback_suggestion": "Use shortest distance routing"
             }
         
         try:
             start_time = datetime.now()
             
-            # Prepare prompt for LLM
+            # Prepare prompt for GPT
             prompt = self._create_route_choice_prompt(stats_json)
             
-            # Generate response using LLM
-            response = await self._generate_llm_response(prompt)
+            # Generate response using OpenAI API
+            response = await self._generate_gpt_response(prompt)
             
             # Parse and structure response
             recommendation = self._parse_llm_response(response, stats_json)
@@ -162,6 +152,7 @@ class LLMAdvisorAgent(AgentBase):
             }
             
         except Exception as e:
+            self.api_errors += 1
             self.logger.error("Error generating LLM recommendation", error=str(e))
             
             return {
@@ -169,68 +160,6 @@ class LLMAdvisorAgent(AgentBase):
                 "message": str(e),
                 "fallback_suggestion": "Use heuristic-based routing"
             }
-    
-    async def _load_llm_model(self):
-        """Load LLM model in background"""
-        
-        if self.model_loading or self.model_loaded:
-            return
-        
-        self.model_loading = True
-        start_time = datetime.now()
-        
-        try:
-            self.logger.info("Loading LLM model", model=self.settings.llm.MODEL_NAME)
-            
-            # Load tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.settings.llm.MODEL_NAME,
-                trust_remote_code=True
-            )
-            
-            # Load model with CPU-only configuration
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.settings.llm.MODEL_NAME,
-                device_map=self.settings.llm.DEVICE_MAP,
-                load_in_4bit=self.settings.llm.LOAD_IN_4BIT,
-                trust_remote_code=True,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-            )
-            
-            # Create pipeline
-            self.llm_pipeline = pipeline(
-                "text-generation",
-                model=self.model,
-                tokenizer=self.tokenizer,
-                device_map=self.settings.llm.DEVICE_MAP
-            )
-            
-            self.model_loaded = True
-            self.model_load_time = (datetime.now() - start_time).total_seconds()
-            
-            self.logger.info("LLM model loaded successfully",
-                           load_time=self.model_load_time,
-                           model_size_gb=self._estimate_model_size())
-            
-        except Exception as e:
-            self.logger.error("Failed to load LLM model", error=str(e))
-            self.model_loaded = False
-        finally:
-            self.model_loading = False
-    
-    def _estimate_model_size(self) -> float:
-        """Estimate model size in GB"""
-        if not self.model:
-            return 0.0
-        
-        try:
-            param_count = sum(p.numel() for p in self.model.parameters())
-            # Rough estimate: 4 bytes per parameter for float32, 2 for float16
-            bytes_per_param = 2 if self.settings.llm.LOAD_IN_4BIT else 4
-            total_bytes = param_count * bytes_per_param
-            return total_bytes / (1024**3)
-        except:
-            return 0.0
     
     def _create_route_choice_prompt(self, stats_json: Dict[str, Any]) -> str:
         """Create prompt for route choice recommendation"""
@@ -243,10 +172,8 @@ class LLMAdvisorAgent(AgentBase):
         traffic_level = stats_json.get("traffic_level", "unknown")
         system_load = stats_json.get("system_load_percent", 0.0)
         
-        prompt = f"""<|system|>
-You are an expert waste collection route optimization advisor. Analyze the given statistics and provide a concise recommendation for route planning strategy.
+        prompt = f"""You are an expert waste collection route optimization advisor. Analyze the given statistics and provide a concise recommendation for route planning strategy.
 
-<|user|>
 Current waste collection system status:
 - Available trucks: {truck_count}
 - Total bins: {bin_count}
@@ -261,42 +188,33 @@ Based on these conditions, what routing strategy would you recommend? Consider f
 3. System capacity utilization
 4. Risk of bin overflow
 
-Provide a brief, actionable recommendation with reasoning.
-
-<|assistant|>
-"""
+Provide a brief, actionable recommendation with reasoning. Keep your response focused and under 200 words."""
         
         return prompt
     
-    async def _generate_llm_response(self, prompt: str) -> str:
-        """Generate response using LLM pipeline"""
+    async def _generate_gpt_response(self, prompt: str) -> str:
+        """Generate response using OpenAI GPT API"""
         
-        if not self.llm_pipeline:
-            raise RuntimeError("LLM pipeline not available")
+        if not self.openai_client:
+            raise RuntimeError("OpenAI client not available")
         
         try:
-            # Run LLM inference
-            response = self.llm_pipeline(
-                prompt,
-                max_new_tokens=self.settings.llm.MAX_NEW_TOKENS,
-                temperature=self.settings.llm.TEMPERATURE,
-                do_sample=True,
-                pad_token_id=self.tokenizer.eos_token_id
+            response = await asyncio.to_thread(
+                self.openai_client.ChatCompletion.create,
+                model=self.settings.llm.MODEL_NAME or "gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are an expert waste collection optimization advisor."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=self.settings.llm.MAX_NEW_TOKENS or 300,
+                temperature=self.settings.llm.TEMPERATURE or 0.7,
+                timeout=self.settings.llm.REQUEST_TIMEOUT_SEC or 30
             )
             
-            # Extract generated text
-            full_text = response[0]["generated_text"]
-            
-            # Remove prompt from response
-            if "<|assistant|>" in full_text:
-                generated_text = full_text.split("<|assistant|>")[-1].strip()
-            else:
-                generated_text = full_text[len(prompt):].strip()
-            
-            return generated_text
+            return response.choices[0].message.content.strip()
             
         except Exception as e:
-            self.logger.error("LLM inference failed", error=str(e))
+            self.logger.error("OpenAI API call failed", error=str(e))
             raise
     
     def _parse_llm_response(self, response: str, stats_json: Dict[str, Any]) -> LLMRecommendation:
@@ -429,7 +347,6 @@ Provide a brief, actionable recommendation with reasoning.
         """Register LLM-specific message handlers"""
         self.register_handler("request_recommendation", self._handle_request_recommendation)
         self.register_handler("get_llm_status", self._handle_get_llm_status)
-        self.register_handler("reload_model", self._handle_reload_model)
         self.register_handler("get_recommendations_history", self._handle_get_recommendations_history)
     
     async def _handle_request_recommendation(self, data: Dict[str, Any]):
@@ -439,7 +356,7 @@ Provide a brief, actionable recommendation with reasoning.
                 await self.send_message(
                     "llm_recommendation_error",
                     {
-                        "error": "LLM model not loaded",
+                        "error": "OpenAI client not initialized",
                         "correlation_id": data.get("correlation_id")
                     }
                 )
@@ -474,14 +391,11 @@ Provide a brief, actionable recommendation with reasoning.
         
         status = {
             "model_loaded": self.model_loaded,
-            "model_loading": self.model_loading,
-            "model_name": self.settings.llm.MODEL_NAME,
-            "transformers_available": TRANSFORMERS_AVAILABLE,
-            "device_map": self.settings.llm.DEVICE_MAP,
-            "load_in_4bit": self.settings.llm.LOAD_IN_4BIT,
-            "model_load_time_sec": self.model_load_time,
-            "estimated_model_size_gb": self._estimate_model_size(),
+            "model_name": self.settings.llm.MODEL_NAME or "gpt-3.5-turbo",
+            "openai_available": OPENAI_AVAILABLE,
+            "api_key_configured": bool(os.getenv("OPENAI_API_KEY")),
             "recommendations_generated": self.recommendations_generated,
+            "api_errors": self.api_errors,
             "avg_inference_time_sec": (
                 self.total_inference_time / max(1, self.recommendations_generated)
             ),
@@ -490,37 +404,6 @@ Provide a brief, actionable recommendation with reasoning.
         }
         
         await self.send_message("llm_status", status)
-    
-    async def _handle_reload_model(self, data: Dict[str, Any]):
-        """Handle model reload request"""
-        try:
-            if self.model_loaded:
-                # Cleanup existing model
-                await self.cleanup()
-                self.model_loaded = False
-            
-            # Reload model
-            await self._load_llm_model()
-            
-            await self.send_message(
-                "model_reload_complete",
-                {
-                    "success": self.model_loaded,
-                    "load_time_sec": self.model_load_time,
-                    "correlation_id": data.get("correlation_id")
-                }
-            )
-            
-        except Exception as e:
-            self.logger.error("Error reloading model", error=str(e))
-            
-            await self.send_message(
-                "model_reload_error",
-                {
-                    "error": str(e),
-                    "correlation_id": data.get("correlation_id")
-                }
-            )
     
     async def _handle_get_recommendations_history(self, data: Dict[str, Any]):
         """Handle recommendations history request"""
@@ -554,28 +437,23 @@ Provide a brief, actionable recommendation with reasoning.
         return {
             "model_status": {
                 "loaded": self.model_loaded,
-                "loading": self.model_loading,
-                "model_name": self.settings.llm.MODEL_NAME,
-                "estimated_size_gb": self._estimate_model_size()
+                "model_name": self.settings.llm.MODEL_NAME or "gpt-3.5-turbo",
+                "api_key_configured": bool(os.getenv("OPENAI_API_KEY"))
             },
             "performance": {
                 "recommendations_generated": self.recommendations_generated,
+                "api_errors": self.api_errors,
                 "total_inference_time_sec": self.total_inference_time,
                 "avg_inference_time_sec": (
                     self.total_inference_time / max(1, self.recommendations_generated)
-                ),
-                "model_load_time_sec": self.model_load_time
+                )
             },
             "queue": {
                 "pending_requests": len(self.pending_requests),
                 "recommendations_in_history": len(self.recommendation_history)
             },
             "capabilities": {
-                "transformers_available": TRANSFORMERS_AVAILABLE,
-                "enabled_in_settings": self.settings.llm.ENABLE_LLM_ADVISOR,
-                "memory_sufficient": (
-                    psutil.virtual_memory().total / (1024**3) >= 
-                    self.settings.llm.MIN_MEMORY_GB
-                )
+                "openai_available": OPENAI_AVAILABLE,
+                "enabled_in_settings": self.settings.llm.ENABLE_LLM_ADVISOR
             }
         }
