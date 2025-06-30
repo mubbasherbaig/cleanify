@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cleanify v2 - Intelligent Waste Collection System</title>
+    
+    <!-- External Libraries -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            overflow-x: hidden;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 300px 1fr 320px;
+            grid-template-rows: 60px 1fr 200px;
+            height: 100vh;
+            gap: 1px;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        /* Header */
+        .header {
+            grid-column: 1 / -1;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+
+        .system-status {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 12px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            font-size: 14px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4CAF50;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.error {
+            background: #f44336;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            overflow-y: auto;
+            backdrop-filter: blur(10px);
+        }
+
+        .control-section {
+            margin-bottom: 25px;
+            padding: 15px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.8);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 12px;
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 5px;
+        }
+
+        .simulation-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .speed-control {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .speed-slider {
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: #ddd;
+            outline: none;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+
+        .speed-slider:hover {
+            opacity: 1;
+        }
+
+        .speed-slider::-webkit-slider-thumb {
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #4CAF50;
+            cursor: pointer;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            text-align: center;
+            position: relative;
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            color: white;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(45deg, #2196F3, #1976D2);
+            color: white;
+        }
+
+        .btn-warning {
+            background: linear-gradient(45deg, #FF9800, #F57C00);
+            color: white;
+        }
+
+        .btn-danger {
+            background: linear-gradient(45deg, #f44336, #d32f2f);
+            color: white;
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn.loading::after {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            margin: auto;
+            border: 2px solid transparent;
+            border-top-color: #ffffff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        @keyframes spin {
+            0% { transform: translate(-50%, -50%) rotate(0deg); }
+            100% { transform: translate(-50%, -50%) rotate(360deg); }
+        }
+
+        /* Map */
+        .map-container {
+            position: relative;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+
+        .map-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Right Panel */
+        .right-panel {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            overflow-y: auto;
+            backdrop-filter: blur(10px);
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        .agent-list {
+            list-style: none;
+        }
+
+        .agent-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            margin-bottom: 5px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 8px;
+            border-left: 4px solid #4CAF50;
+        }
+
+        .agent-status {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .status-healthy {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .status-degraded {
+            background: #FF9800;
+            color: white;
+        }
+
+        .status-unhealthy {
+            background: #f44336;
+            color: white;
+        }
+
+        /* Bottom Panel */
+        .bottom-panel {
+            grid-column: 1 / -1;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .chart-container {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .chart-title {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-align: center;
+            color: #333;
+        }
+
+        .bin-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 8px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+        }
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .corridor-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .corridor-slider {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .corridor-slider input {
+            flex: 1;
+        }
+
+        .corridor-value {
+            min-width: 50px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 10% auto;
+            padding: 20px;
+            border-radius: 10px;
+            width: 60%;
+            max-width: 600px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close:hover {
+            color: black;
+        }
+
+        .error-message {
+            background: #ffebee;
+            color: #c62828;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            border: 1px solid #ffcdd2;
+        }
+
+        .loading-indicator {
+            display: none;
+            text-align: center;
+            padding: 10px;
+            color: #666;
+        }
+
+        @media (max-width: 1200px) {
+            .container {
+                grid-template-columns: 250px 1fr 280px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+                grid-template-rows: 60px 300px 1fr 150px;
+            }
+            
+            .sidebar, .right-panel {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">Cleanify v2-alpha</div>
+            <div class="system-status">
+                <div class="status-indicator">
+                    <div class="status-dot" id="systemDot"></div>
+                    <span id="systemStatus">System Starting...</span>
+                </div>
+                <div class="status-indicator">
+                    <span id="simulationTime">--:--:--</span>
+                </div>
+                <div class="status-indicator">
+                    <span id="agentCount">0 Agents</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Left Sidebar -->
+        <aside class="sidebar">
+            <!-- Simulation Controls -->
+            <div class="control-section">
+                <div class="section-title">Simulation Control</div>
+                <div class="simulation-controls">
+                    <button class="btn btn-primary" id="startBtn" onclick="startSimulation()">Start Simulation</button>
+                    <button class="btn btn-warning" id="pauseBtn" onclick="pauseSimulation()" disabled>Pause Simulation</button>
+                    
+                    <div class="speed-control">
+                        <label>Speed: <span id="speedValue">1.0x</span></label>
+                        <input type="range" class="speed-slider" id="speedSlider" min="0.1" max="5" step="0.1" value="1" oninput="updateSimulationSpeed(this.value)">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Route Management -->
+            <div class="control-section">
+                <div class="section-title">Route Management</div>
+                <div class="simulation-controls">
+                    <button class="btn btn-secondary" onclick="planRoutes()">Plan Routes</button>
+                    <button class="btn btn-secondary" onclick="showRouteModal()">Manual Dispatch</button>
+                    <button class="btn btn-danger" onclick="triggerEmergency()">Emergency Test</button>
+                </div>
+            </div>
+
+            <!-- Corridor Analysis -->
+            <div class="control-section">
+                <div class="section-title">Corridor Analysis</div>
+                <div class="corridor-controls">
+                    <div class="corridor-slider">
+                        <label>Width:</label>
+                        <input type="range" min="100" max="500" value="250" id="corridorWidth" oninput="updateCorridorWidth(this.value)">
+                        <span class="corridor-value" id="corridorWidthValue">250m</span>
+                    </div>
+                    <div class="corridor-slider">
+                        <label>Detour:</label>
+                        <input type="range" min="0.1" max="1.0" step="0.1" value="0.3" id="corridorDetour" oninput="updateCorridorDetour(this.value)">
+                        <span class="corridor-value" id="corridorDetourValue">0.3km</span>
+                    </div>
+                    <button class="btn btn-secondary" onclick="toggleCorridorView()">Toggle Corridors</button>
+                </div>
+            </div>
+
+            <!-- Configuration -->
+            <div class="control-section">
+                <div class="section-title">Configuration</div>
+                <div class="simulation-controls">
+                    <button class="btn btn-secondary" onclick="loadSampleConfig()">Load Sample Config</button>
+                    <button class="btn btn-secondary" onclick="exportConfig()">Export Config</button>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Map -->
+        <main class="map-container">
+            <div id="map"></div>
+            <div class="map-overlay">
+                <div class="bin-legend">
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #4CAF50;"></div>
+                        <span>Normal (< 85%)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #FF9800;"></div>
+                        <span>Urgent (85-95%)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #f44336;"></div>
+                        <span>Critical (> 95%)</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color" style="background: #2196F3;"></div>
+                        <span>Trucks</span>
+                    </div>
+                </div>
+            </div>
+            <div class="loading-indicator" id="mapLoading">Loading map data...</div>
+        </main>
+
+        <!-- Right Panel -->
+        <aside class="right-panel">
+            <!-- Metrics -->
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-value" id="binCount">--</div>
+                    <div class="metric-label">Total Bins</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="urgentBins">--</div>
+                    <div class="metric-label">Urgent Bins</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="truckCount">--</div>
+                    <div class="metric-label">Active Trucks</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="routeCount">--</div>
+                    <div class="metric-label">Active Routes</div>
+                </div>
+            </div>
+
+            <!-- Agent Status -->
+            <div class="control-section">
+                <div class="section-title">Agent Status</div>
+                <ul class="agent-list" id="agentList">
+                    <li class="agent-item">
+                        <span>Loading...</span>
+                        <span class="agent-status">--</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Traffic Conditions -->
+            <div class="control-section">
+                <div class="section-title">Traffic Conditions</div>
+                <div id="trafficInfo">
+                    <div>Level: <span id="trafficLevel">--</span></div>
+                    <div>Multiplier: <span id="trafficMultiplier">--</span></div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Bottom Panel -->
+        <section class="bottom-panel">
+            <!-- <div class="chart-container">
+                <div class="chart-title">Bin Fill Levels</div>
+                <canvas id="binChart" width="400" height="150"></canvas>
+            </div>
+            <div class="chart-container">
+                <div class="chart-title">System Performance</div>
+                <canvas id="performanceChart" width="400" height="150"></canvas>
+            </div>
+            <div class="chart-container">
+                <div class="chart-title">Route Efficiency</div>
+                <canvas id="routeChart" width="400" height="150"></canvas>
+            </div> -->
+        </section>
+    </div>
+
+    <!-- Modal for Manual Dispatch -->
+    <div id="routeModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeRouteModal()">&times;</span>
+            <h2>Manual Dispatch</h2>
+            <div style="margin: 20px 0;">
+                <label>Truck ID:</label>
+                <select id="truckSelect" style="width: 100%; padding: 8px; margin: 5px 0;">
+                    <option value="">Select a truck...</option>
+                </select>
+            </div>
+            <div style="margin: 20px 0;">
+                <label>Target Bins (comma-separated IDs):</label>
+                <input type="text" id="binIds" placeholder="bin_001, bin_002, bin_003" style="width: 100%; padding: 8px;">
+            </div>
+            <div style="margin: 20px 0;">
+                <label>Priority:</label>
+                <select id="priority" style="width: 100%; padding: 8px;">
+                    <option value="normal">Normal</option>
+                    <option value="high">High</option>
+                    <option value="critical">Critical</option>
+                </select>
+            </div>
+            <button class="btn btn-primary" onclick="dispatchTruck()">Dispatch</button>
+            <div id="dispatchError" class="error-message" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        const ENABLE_CHARTS = false;
+        let map;
+        let binMarkers = new Map();
+        let truckMarkers = new Map();
+        let routeLines = new Map();
+        let corridorLayers = new Map();
+        let systemState = null;
+        let simulationRunning = false;
+        let corridorVisible = false;
+        let updateInterval;
+        let lastUpdateTime = 0;
+        let isUpdating = false;
+        
+        // Rate limiting
+        const API_RATE_LIMIT = 1000; // Minimum ms between API calls
+        let lastApiCall = 0;
+        
+        // Charts
+        let binChart, performanceChart, routeChart;
+
+        // API Base URL
+        const API_BASE = 'http://localhost:8000';
+
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', function() {
+            try {
+                initializeMap();
+                initializeCharts();
+                startUpdateLoop();
+                updateTimeDisplay();
+            } catch (error) {
+                console.error('Initialization error:', error);
+                showError('Failed to initialize application');
+            }
+        });
+
+        // Initialize Leaflet map centered on Islamabad
+        function initializeMap() {
+            try {
+                // Islamabad coordinates
+                map = L.map('map').setView([33.6844, 73.0479], 12);
+                
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors',
+                    maxZoom: 18
+                }).addTo(map);
+
+                // Add map ready indicator
+                map.whenReady(function() {
+                    console.log('Map initialized successfully');
+                    document.getElementById('mapLoading').style.display = 'none';
+                });
+
+            } catch (error) {
+                console.error('Map initialization error:', error);
+                showError('Failed to initialize map');
+            }
+        }
+
+        // Initialize charts with error handling
+        function initializeCharts() {
+            try {
+                // Bin Fill Levels Chart
+                const binCtx = document.getElementById('binChart').getContext('2d');
+                binChart = new Chart(binCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Normal', 'Urgent', 'Critical'],
+                        datasets: [{
+                            data: [0, 0, 0],
+                            backgroundColor: ['#4CAF50', '#FF9800', '#f44336']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        },
+                        animation: {
+                            duration: 1000
+                        }
+                    }
+                });
+
+                // Performance Chart
+                const perfCtx = document.getElementById('performanceChart').getContext('2d');
+                performanceChart = new Chart(perfCtx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Routes',
+                            data: [],
+                            borderColor: '#4CAF50',
+                            tension: 0.1,
+                            fill: false
+                        }, {
+                            label: 'Urgent Bins',
+                            data: [],
+                            borderColor: '#f44336',
+                            tension: 0.1,
+                            fill: false
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
+                        },
+                        animation: {
+                            duration: 500
+                        }
+                    }
+                });
+
+                // Route Efficiency Chart
+                const routeCtx = document.getElementById('routeChart').getContext('2d');
+                routeChart = new Chart(routeCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: ['Distance (km)', 'Duration (min)', 'Efficiency %'],
+                        datasets: [{
+                            label: 'Metrics',
+                            data: [0, 0, 0],
+                            backgroundColor: ['#2196F3', '#FF9800', '#4CAF50']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
+                        },
+                        animation: {
+                            duration: 500
+                        }
+                    }
+                });
+
+                console.log('Charts initialized successfully');
+            } catch (error) {
+                console.error('Chart initialization error:', error);
+            }
+        }
+
+        // Rate-limited API call function
+        async function apiCall(endpoint, method = 'GET', data = null) {
+            const now = Date.now();
+            if (now - lastApiCall < API_RATE_LIMIT) {
+                console.log('API call rate limited:', endpoint);
+                return null;
+            }
+            lastApiCall = now;
+
+            try {
+                const options = {
+                    method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    timeout: 5000 // 5 second timeout
+                };
+                
+                if (data) {
+                    options.body = JSON.stringify(data);
+                }
+                
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000);
+                options.signal = controller.signal;
+                
+                const response = await fetch(`${API_BASE}${endpoint}`, options);
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                return await response.json();
+            } catch (error) {
+                console.error(`API call failed for ${endpoint}:`, error.message);
+                updateSystemStatus('API Error', true);
+                return null;
+            }
+        }
+
+        // Simulation Control Functions
+        async function startSimulation() {
+            const btn = document.getElementById('startBtn');
+            btn.classList.add('loading');
+            btn.disabled = true;
+
+            try {
+                const result = await apiCall('/api/simulation/start', 'POST');
+                if (result && result.status === 'started') {
+                    simulationRunning = true;
+                    document.getElementById('pauseBtn').disabled = false;
+                    updateSystemStatus('Simulation Running');
+                    // Load sample config after starting simulation
+                    await loadSampleConfig();
+                } else {
+                    throw new Error('Failed to start simulation');
+                }
+            } catch (error) {
+                console.error('Start simulation error:', error);
+                showError('Failed to start simulation');
+                btn.disabled = false;
+            } finally {
+                btn.classList.remove('loading');
+            }
+        }
+
+        async function pauseSimulation() {
+            const btn = document.getElementById('pauseBtn');
+            btn.classList.add('loading');
+            btn.disabled = true;
+
+            try {
+                const result = await apiCall('/api/simulation/pause', 'POST');
+                if (result && result.status === 'paused') {
+                    simulationRunning = false;
+                    document.getElementById('startBtn').disabled = false;
+                    updateSystemStatus('Simulation Paused');
+                } else {
+                    throw new Error('Failed to pause simulation');
+                }
+            } catch (error) {
+                console.error('Pause simulation error:', error);
+                showError('Failed to pause simulation');
+                btn.disabled = false;
+            } finally {
+                btn.classList.remove('loading');
+            }
+        }
+
+        async function updateSimulationSpeed(speed) {
+            document.getElementById('speedValue').textContent = speed + 'x';
+            try {
+                await apiCall('/api/simulation/speed', 'POST', { multiplier: parseFloat(speed) });
+            } catch (error) {
+                console.error('Update speed error:', error);
+            }
+        }
+
+        // Route Management Functions
+        async function planRoutes() {
+            try {
+                const result = await apiCall('/api/dispatch/plan', 'POST');
+                if (result) {
+                    showSuccess('Route planning initiated');
+                } else {
+                    showError('Failed to initiate route planning');
+                }
+            } catch (error) {
+                console.error('Plan routes error:', error);
+                showError('Failed to plan routes');
+            }
+        }
+
+        function showRouteModal() {
+            populateTruckSelect();
+            document.getElementById('routeModal').style.display = 'block';
+        }
+
+        function closeRouteModal() {
+            document.getElementById('routeModal').style.display = 'none';
+            document.getElementById('dispatchError').style.display = 'none';
+        }
+
+        async function populateTruckSelect() {
+            const select = document.getElementById('truckSelect');
+            select.innerHTML = '<option value="">Select a truck...</option>';
+            
+            if (systemState && systemState.trucks) {
+                systemState.trucks.forEach(truck => {
+                    const option = document.createElement('option');
+                    option.value = truck.id;
+                    option.textContent = `${truck.name || truck.id} (${truck.status})`;
+                    select.appendChild(option);
+                });
+            }
+        }
+
+        async function dispatchTruck() {
+            const truckId = document.getElementById('truckSelect').value;
+            const binIds = document.getElementById('binIds').value.split(',').map(id => id.trim()).filter(id => id);
+            const priority = document.getElementById('priority').value;
+
+            if (!truckId) {
+                showDispatchError('Please select a truck');
+                return;
+            }
+
+            if (binIds.length === 0) {
+                showDispatchError('Please enter at least one bin ID');
+                return;
+            }
+
+            try {
+                const result = await apiCall('/api/dispatch/manual', 'POST', {
+                    truck_id: truckId,
+                    bin_ids: binIds,
+                    priority: priority
+                });
+
+                if (result && result.status === 'success') {
+                    showSuccess('Truck dispatched successfully');
+                    closeRouteModal();
+                } else {
+                    showDispatchError('Failed to dispatch truck');
+                }
+            } catch (error) {
+                console.error('Dispatch error:', error);
+                showDispatchError('Error dispatching truck');
+            }
+        }
+
+        async function triggerEmergency() {
+            try {
+                const result = await apiCall('/api/overflow/trigger', 'POST', {
+                    event_type: 'overflow',
+                    severity: 'high',
+                    description: 'Test emergency simulation',
+                    affected_bins: ['bin_001', 'bin_002']
+                });
+                
+                if (result) {
+                    showSuccess('Emergency simulation triggered');
+                } else {
+                    showError('Failed to trigger emergency');
+                }
+            } catch (error) {
+                console.error('Emergency trigger error:', error);
+                showError('Failed to trigger emergency');
+            }
+        }
+
+        // Corridor Control Functions
+        function updateCorridorWidth(value) {
+            document.getElementById('corridorWidthValue').textContent = value + 'm';
+            if (corridorVisible) {
+                updateCorridorDisplay();
+            }
+        }
+
+        function updateCorridorDetour(value) {
+            document.getElementById('corridorDetourValue').textContent = value + 'km';
+            if (corridorVisible) {
+                updateCorridorDisplay();
+            }
+        }
+
+        function toggleCorridorView() {
+            corridorVisible = !corridorVisible;
+            if (corridorVisible) {
+                showCorridors();
+            } else {
+                hideCorridors();
+            }
+        }
+
+        function showCorridors() {
+            if (systemState && systemState.active_routes) {
+                systemState.active_routes.forEach(route => {
+                    if (route.stops && route.stops.length > 1) {
+                        const coords = route.stops.map(stop => [stop.lat, stop.lon]);
+                        const corridorWidth = parseInt(document.getElementById('corridorWidth').value);
+                        
+                        const corridor = L.polyline(coords, {
+                            color: '#4CAF50',
+                            weight: Math.max(2, corridorWidth / 50),
+                            opacity: 0.3
+                        }).addTo(map);
+                        
+                        corridorLayers.set(route.id, corridor);
+                    }
+                });
+            }
+        }
+
+        function hideCorridors() {
+            corridorLayers.forEach(layer => {
+                map.removeLayer(layer);
+            });
+            corridorLayers.clear();
+        }
+
+        function updateCorridorDisplay() {
+            hideCorridors();
+            showCorridors();
+        }
+
+        // Configuration Functions
+        async function loadSampleConfig() {
+            try {
+                const sampleConfig = {
+                    depot: {
+                        name: "Islamabad Central Depot",
+                        latitude: 33.6844,
+                        longitude: 73.0479
+                    },
+                    trucks: [
+                        { id: "truck_001", name: "Truck Alpha", capacity: 5000 },
+                        { id: "truck_002", name: "Truck Beta", capacity: 5000 },
+                        { id: "truck_003", name: "Truck Gamma", capacity: 7000 }
+                    ],
+                    bins: generateSampleBins()
+                };
+
+                const result = await apiCall('/api/load-config', 'POST', sampleConfig);
+                if (result) {
+                    showSuccess('Sample configuration loaded');
+                } else {
+                    showError('Failed to load configuration');
+                }
+            } catch (error) {
+                console.error('Load config error:', error);
+                showError('Failed to load sample configuration');
+            }
+        }
+
+        function generateSampleBins() {
+            const bins = [];
+            const islamabadCenter = [33.6844, 73.0479]; // Islamabad center
+            
+            for (let i = 1; i <= 20; i++) {
+                bins.push({
+                    id: `bin_${String(i).padStart(3, '0')}`,
+                    latitude: islamabadCenter[0] + (Math.random() - 0.5) * 0.05, // Spread around Islamabad
+                    longitude: islamabadCenter[1] + (Math.random() - 0.5) * 0.05,
+                    capacity: 240,
+                    fill_level: 40 + Math.random() * 50, // 40-90% full
+                    fill_rate: 2 + Math.random() * 3
+                });
+            }
+            
+            return bins;
+        }
+
+        function exportConfig() {
+            if (systemState) {
+                try {
+                    const config = {
+                        timestamp: new Date().toISOString(),
+                        bins: systemState.bins || [],
+                        trucks: systemState.trucks || []
+                    };
+                    
+                    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'cleanify_config.json';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    
+                    showSuccess('Configuration exported');
+                } catch (error) {
+                    console.error('Export error:', error);
+                    showError('Failed to export configuration');
+                }
+            } else {
+                showError('No configuration to export');
+            }
+        }
+
+        // Update Functions with improved error handling
+        async function updateSystemState() {
+            if (isUpdating) return; // Prevent concurrent updates
+            isUpdating = true;
+
+            try {
+                const state = await apiCall('/api/system-state');
+                if (state) {
+                    systemState = state;
+                    updateMap();
+                    updateMetrics();
+                    updateCharts();
+                    updateSystemStatus('System Online');
+                } else {
+                    updateSystemStatus('API Unavailable', true);
+                }
+            } catch (error) {
+                console.error('Update system state error:', error);
+                updateSystemStatus('Update Error', true);
+            } finally {
+                isUpdating = false;
+            }
+        }
+
+        async function updateAgentStatus() {
+            try {
+                const status = await apiCall('/api/agents/status');
+                if (status) {
+                    updateAgentList(status.agents || {});
+                    document.getElementById('agentCount').textContent = `${status.healthy_agents || 0}/${status.total_agents || 0} Agents`;
+                }
+            } catch (error) {
+                console.error('Update agent status error:', error);
+            }
+        }
+
+        function updateMap() {
+            if (!systemState || !map) return;
+
+            try {
+                // Clear existing markers efficiently
+                binMarkers.forEach(marker => map.removeLayer(marker));
+                truckMarkers.forEach(marker => map.removeLayer(marker));
+                routeLines.forEach(line => map.removeLayer(line));
+                
+                binMarkers.clear();
+                truckMarkers.clear();
+                routeLines.clear();
+
+                // Add bin markers
+                if (systemState.bins && Array.isArray(systemState.bins)) {
+                    systemState.bins.forEach(bin => {
+                        if (bin.lat && bin.lon) {
+                            const color = getBinColor(bin.fill_level || 0);
+                            const marker = L.circleMarker([bin.lat, bin.lon], {
+                                radius: 6,
+                                fillColor: color,
+                                color: '#000',
+                                weight: 1,
+                                opacity: 1,
+                                fillOpacity: 0.8
+                            }).addTo(map);
+                            
+                            marker.bindPopup(`
+                                <b>Bin ${bin.id}</b><br>
+                                Fill Level: ${(bin.fill_level || 0).toFixed(1)}%<br>
+                                Capacity: ${bin.capacity_l || 0}L<br>
+                                Status: ${(bin.fill_level || 0) >= 85 ? 'Urgent' : 'Normal'}
+                            `);
+                            
+                            binMarkers.set(bin.id, marker);
+                        }
+                    });
+                }
+
+                // Add truck markers
+                if (systemState.trucks && Array.isArray(systemState.trucks)) {
+                    systemState.trucks.forEach(truck => {
+                        if (truck.lat && truck.lon) {
+                            const marker = L.marker([truck.lat, truck.lon], {
+                                icon: L.divIcon({
+                                    className: 'truck-marker',
+                                    html: '<div style="background: #2196F3; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold;">T</div>',
+                                    iconSize: [20, 15],
+                                    iconAnchor: [10, 7]
+                                })
+                            }).addTo(map);
+                            
+                            marker.bindPopup(`
+                                <b>Truck ${truck.name || truck.id}</b><br>
+                                Status: ${truck.status || 'Unknown'}<br>
+                                Load: ${truck.current_load_l || 0}/${truck.capacity_l || 0}L<br>
+                                Utilization: ${(((truck.current_load_l || 0) / (truck.capacity_l || 1)) * 100).toFixed(1)}%
+                            `);
+                            
+                            truckMarkers.set(truck.id, marker);
+                        }
+                    });
+                }
+
+                // Add route lines
+                if (systemState.active_routes && Array.isArray(systemState.active_routes)) {
+                    systemState.active_routes.forEach(route => {
+                        if (route.stops && Array.isArray(route.stops) && route.stops.length > 1) {
+                            const coords = route.stops
+                                .filter(stop => stop.lat && stop.lon)
+                                .map(stop => [stop.lat, stop.lon]);
+                            
+                            if (coords.length > 1) {
+                                const line = L.polyline(coords, {
+                                    color: '#FF9800',
+                                    weight: 3,
+                                    opacity: 0.7
+                                }).addTo(map);
+                                
+                                line.bindPopup(`
+                                    <b>Route ${route.id}</b><br>
+                                    Truck: ${route.truck_id}<br>
+                                    Distance: ${(route.total_distance_km || 0).toFixed(1)}km<br>
+                                    Duration: ${(route.estimated_duration_min || 0).toFixed(0)}min<br>
+                                    Stops: ${route.stops.length}
+                                `);
+                                
+                                routeLines.set(route.id, line);
+                            }
+                        }
+                    });
+                }
+
+                // Update corridors if visible
+                if (corridorVisible) {
+                    updateCorridorDisplay();
+                }
+
+            } catch (error) {
+                console.error('Map update error:', error);
+            }
+        }
+
+        function getBinColor(fillLevel) {
+            if (fillLevel >= 95) return '#f44336'; // Critical - Red
+            if (fillLevel >= 85) return '#FF9800'; // Urgent - Orange
+            return '#4CAF50'; // Normal - Green
+        }
+
+        function updateMetrics() {
+            if (!systemState) return;
+
+            try {
+                const bins = systemState.bins || [];
+                const trucks = systemState.trucks || [];
+                const routes = systemState.active_routes || [];
+
+                document.getElementById('binCount').textContent = bins.length;
+                document.getElementById('truckCount').textContent = trucks.length;
+                document.getElementById('routeCount').textContent = routes.length;
+                
+                const urgentCount = bins.filter(bin => (bin.fill_level || 0) >= 85).length;
+                document.getElementById('urgentBins').textContent = urgentCount;
+            } catch (error) {
+                console.error('Metrics update error:', error);
+            }
+        }
+
+        function updateCharts() {
+            if (!systemState || !binChart || !performanceChart || !routeChart) return;
+
+            try {
+                const bins = systemState.bins || [];
+
+                // Update bin chart
+                const normalBins = bins.filter(bin => (bin.fill_level || 0) < 85).length;
+                const urgentBins = bins.filter(bin => (bin.fill_level || 0) >= 85 && (bin.fill_level || 0) < 95).length;
+                const criticalBins = bins.filter(bin => (bin.fill_level || 0) >= 95).length;
+                
+                binChart.data.datasets[0].data = [normalBins, urgentBins, criticalBins];
+                binChart.update('none'); // No animation for better performance
+
+                // Update performance chart
+                const now = new Date().toLocaleTimeString().slice(0, 5);
+                const routes = systemState.active_routes || [];
+                
+                if (performanceChart.data.labels.length > 10) {
+                    performanceChart.data.labels.shift();
+                    performanceChart.data.datasets[0].data.shift();
+                    performanceChart.data.datasets[1].data.shift();
+                }
+                performanceChart.data.labels.push(now);
+                performanceChart.data.datasets[0].data.push(routes.length);
+                performanceChart.data.datasets[1].data.push(urgentBins);
+                performanceChart.update('none');
+
+                // Update route chart
+                if (routes.length > 0) {
+                    const avgDistance = routes.reduce((sum, route) => sum + (route.total_distance_km || 0), 0) / routes.length;
+                    const avgDuration = routes.reduce((sum, route) => sum + (route.estimated_duration_min || 0), 0) / routes.length;
+                    const efficiency = normalBins / Math.max(1, bins.length) * 100;
+                    
+                    routeChart.data.datasets[0].data = [
+                        Math.round(avgDistance * 10) / 10,
+                        Math.round(avgDuration / 10 * 10) / 10,
+                        Math.round(efficiency * 10) / 10
+                    ];
+                    routeChart.update('none');
+                }
+            } catch (error) {
+                console.error('Charts update error:', error);
+            }
+        }
+
+        function updateAgentList(agents) {
+            const agentList = document.getElementById('agentList');
+            agentList.innerHTML = '';
+            
+            try {
+                for (const [agentId, agentData] of Object.entries(agents)) {
+                    const li = document.createElement('li');
+                    li.className = 'agent-item';
+                    
+                    const statusClass = agentData.healthy ? 'status-healthy' : 'status-unhealthy';
+                    const statusText = agentData.healthy ? 'Healthy' : 'Unhealthy';
+                    
+                    li.innerHTML = `
+                        <span>${agentId}</span>
+                        <span class="agent-status ${statusClass}">${statusText}</span>
+                    `;
+                    
+                    agentList.appendChild(li);
+                }
+            } catch (error) {
+                console.error('Agent list update error:', error);
+            }
+        }
+
+        function updateTimeDisplay() {
+            try {
+                const now = new Date();
+                document.getElementById('simulationTime').textContent = now.toLocaleTimeString();
+            } catch (error) {
+                console.error('Time display error:', error);
+            }
+        }
+
+        function updateSystemStatus(status, isError = false) {
+            const statusElement = document.getElementById('systemStatus');
+            const dotElement = document.getElementById('systemDot');
+            
+            statusElement.textContent = status;
+            
+            if (isError) {
+                dotElement.classList.add('error');
+            } else {
+                dotElement.classList.remove('error');
+            }
+        }
+
+        // Utility functions
+        function showError(message) {
+            console.error(message);
+            // Could implement toast notifications here
+        }
+
+        function showSuccess(message) {
+            console.log(message);
+            // Could implement toast notifications here
+        }
+
+        function showDispatchError(message) {
+            const errorDiv = document.getElementById('dispatchError');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        // Main update loop with improved error handling and rate limiting
+        function startUpdateLoop() {
+            // Reduced frequency to prevent overload
+            updateInterval = setInterval(() => {
+                try {
+                    const now = Date.now();
+                    if (now - lastUpdateTime < 3000) return; // Minimum 3 seconds between updates
+                    lastUpdateTime = now;
+
+                    updateSystemState();
+                    updateAgentStatus();
+                    updateTimeDisplay();
+                } catch (error) {
+                    console.error('Update loop error:', error);
+                }
+            }, 5000); // 5 second intervals
+
+            // Initial load
+            setTimeout(() => {
+                updateTimeDisplay();
+            }, 1000);
+        }
+
+        // Event listeners
+        window.addEventListener('click', function(event) {
+            const modal = document.getElementById('routeModal');
+            if (event.target === modal) {
+                closeRouteModal();
+            }
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', function() {
+            if (updateInterval) {
+                clearInterval(updateInterval);
+            }
+        });
+
+        // Error handling for uncaught errors
+        window.addEventListener('error', function(event) {
+            console.error('Uncaught error:', event.error);
+            updateSystemStatus('System Error', true);
+        });
+    </script>
+</body>
+</html>
