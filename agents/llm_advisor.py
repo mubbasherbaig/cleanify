@@ -71,6 +71,7 @@ class LLMAdvisorAgent(AgentBase):
             return
         
         try:
+            openai.api_key = "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"
             self.openai_client = openai
             self.model_loaded = True
             
