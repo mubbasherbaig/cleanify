@@ -242,7 +242,7 @@ async def get_system_state():
 
 @app.post("/api/load-config", tags=["Configuration"])
 async def load_config(config: ConfigurationRequest):
-    """Load system configuration"""
+    """Load system configuration - FIXED VERSION"""
     
     if not supervisor:
         raise HTTPException(
@@ -251,36 +251,101 @@ async def load_config(config: ConfigurationRequest):
         )
     
     try:
-        # Send configuration to supervisor
-        await supervisor.send_message(
-            "load_config",
-            {
-                "config": {
-                    "depot": config.depot,
-                    "trucks": config.trucks,
-                    "bins": config.bins
-                }
-            }
-        )
+        print(f"🔧 API: Loading config with {len(config.bins)} bins, {len(config.trucks)} trucks")
         
-        # Wait for response (simplified - in production would use correlation IDs)
-        await asyncio.sleep(2.0)
+        # Call supervisor's config handler directly (no Redis needed for API calls)
+        config_data = {
+            "config": {
+                "depot": config.depot,
+                "trucks": config.trucks,
+                "bins": config.bins
+            }
+        }
+        
+        # Call the supervisor method directly instead of sending Redis message
+        success = await supervisor._handle_load_config(config_data)
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Supervisor failed to load configuration"
+            )
+        
+        # Verify the config was actually loaded by checking supervisor state
+        if not supervisor.system_state or len(supervisor.system_state.bins) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Configuration loaded but no data found in supervisor"
+            )
+        
+        print(f"✅ API: Config verified - {len(supervisor.system_state.bins)} bins, {len(supervisor.system_state.trucks)} trucks")
         
         return {
             "status": "success",
-            "message": "Configuration loaded",
+            "message": "Configuration loaded and verified",
             "depot": config.depot.get("name", "Depot"),
-            "trucks": len(config.trucks),
-            "bins": len(config.bins),
+            "trucks": len(supervisor.system_state.trucks),
+            "bins": len(supervisor.system_state.bins),
             "timestamp": datetime.now().isoformat()
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"❌ API: Configuration error: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Configuration error: {str(e)}"
         )
 
+
+@app.get("/api/system-state", response_model=SystemStateResponse, tags=["System"])
+async def get_system_state():
+    """Get current system state - FIXED VERSION"""
+    
+    if not supervisor:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Supervisor not available"
+        )
+    
+    # Get state directly from supervisor instead of Redis
+    state = supervisor.get_current_system_state()
+    
+    if not state:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="System state not initialized"
+        )
+    
+    try:
+        print(f"🔍 API: Returning system state with {len(state.bins)} bins, {len(state.trucks)} trucks")
+        
+        return SystemStateResponse(
+            timestamp=state.timestamp.isoformat(),
+            simulation_running=state.simulation_running,
+            simulation_speed=getattr(state, 'simulation_speed', 1.0),
+            bins=[supervisor._bin_to_dict(bin_obj) for bin_obj in state.bins],
+            trucks=[supervisor._truck_to_dict(truck) for truck in state.trucks],
+            active_routes=[supervisor._route_to_dict(route) for route in state.active_routes],
+            traffic_conditions=[
+                {
+                    "timestamp": tc.timestamp.isoformat(),
+                    "level": tc.level,
+                    "multiplier": tc.multiplier,
+                    "region": tc.region,
+                    "source": tc.source
+                }
+                for tc in state.traffic_conditions
+            ]
+        )
+        
+    except Exception as e:
+        print(f"❌ API: Error getting system state: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting system state: {str(e)}"
+        )
 
 @app.post("/api/simulation/start", tags=["Simulation"])
 async def start_simulation():

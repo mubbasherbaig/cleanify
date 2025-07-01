@@ -1554,7 +1554,7 @@
                 truckMarkers.clear();
                 routeLines.clear();
 
-                // Add bin markers with enhanced visuals
+                // Add bin markers with real-time fill levels
                 if (systemState.bins && Array.isArray(systemState.bins)) {
                     console.log(`Adding ${systemState.bins.length} bin markers...`);
                     
@@ -1565,8 +1565,12 @@
                             const color = getBinColor(bin.fill_level || 0);
                             const fillLevel = bin.fill_level || 0;
                             
+                            // Dynamic radius based on fill level (more visual feedback)
+                            const baseRadius = 8;
+                            const fillRadius = Math.max(baseRadius, baseRadius + (fillLevel / 100) * 4);
+                            
                             const marker = L.circleMarker([bin.lat, bin.lon], {
-                                radius: Math.max(6, fillLevel / 10),
+                                radius: fillRadius,
                                 fillColor: color,
                                 color: '#000',
                                 weight: 2,
@@ -1574,16 +1578,22 @@
                                 fillOpacity: 0.8
                             }).addTo(map);
                             
+                            // Enhanced popup with simulation data
+                            const lastUpdated = bin.last_updated ? 
+                                new Date(bin.last_updated).toLocaleTimeString() : 'Never';
+                            
                             marker.bindPopup(`
                                 <b>Bin ${bin.id}</b><br>
                                 Fill Level: ${fillLevel.toFixed(1)}%<br>
                                 Capacity: ${bin.capacity_l || 0}L<br>
+                                Fill Rate: ${bin.fill_rate_lph || 0}L/h<br>
                                 Status: ${fillLevel >= 95 ? 'Critical' : fillLevel >= 85 ? 'Urgent' : 'Normal'}<br>
+                                Last Updated: ${lastUpdated}<br>
                                 ${bin.assigned_truck ? `Assigned to: ${bin.assigned_truck}` : 'Unassigned'}
                             `);
                             
                             binMarkers.set(bin.id, marker);
-                            console.log(`Added bin marker for ${bin.id} at [${bin.lat}, ${bin.lon}]`);
+                            console.log(`Added bin marker for ${bin.id} at [${bin.lat}, ${bin.lon}] - ${fillLevel.toFixed(1)}%`);
                         } else {
                             console.warn(`Bin ${bin.id} has invalid coordinates:`, { lat: bin.lat, lon: bin.lon });
                         }
@@ -1688,8 +1698,9 @@
         }
 
         function getBinColor(fillLevel) {
-            if (fillLevel >= 95) return '#f44336'; // Critical - Red
-            if (fillLevel >= 85) return '#FF9800'; // Urgent - Orange
+            if (fillLevel >= 120) return '#8E24AA'; // Purple for overflow
+            if (fillLevel >= 95) return '#f44336';  // Critical - Red
+            if (fillLevel >= 85) return '#FF9800';  // Urgent - Orange
             return '#4CAF50'; // Normal - Green
         }
 
@@ -1708,7 +1719,7 @@
                 const urgentCount = bins.filter(bin => (bin.fill_level || 0) >= 85).length;
                 document.getElementById('urgentBins').textContent = urgentCount;
 
-                // Update live status
+                // Enhanced live status with simulation info
                 const binsCollected = bins.filter(bin => bin.being_collected).length;
                 const routesActive = routes.filter(route => route.status === 'active').length;
                 const avgFillLevel = bins.length > 0 ? 
@@ -1717,6 +1728,12 @@
                 document.getElementById('binsCollected').textContent = binsCollected;
                 document.getElementById('routesActive').textContent = routesActive;
                 document.getElementById('avgFillLevel').textContent = avgFillLevel.toFixed(1) + '%';
+
+                // Add simulation speed display
+                if (systemState.simulation_running) {
+                    const speedDisplay = document.getElementById('speedValue') || document.createElement('span');
+                    speedDisplay.textContent = `${systemState.simulation_speed || 1.0}x`;
+                }
 
             } catch (error) {
                 console.error('Metrics update error:', error);
@@ -1749,8 +1766,16 @@
 
         function updateTimeDisplay() {
             try {
-                const now = new Date();
-                document.getElementById('simulationTime').textContent = now.toLocaleTimeString();
+                // Show simulation time if available, otherwise show real time
+                if (systemState && systemState.current_time) {
+                    const simTime = new Date(systemState.current_time);
+                    document.getElementById('simulationTime').textContent = 
+                        `SIM: ${simTime.toLocaleTimeString()}`;
+                } else {
+                    const now = new Date();
+                    document.getElementById('simulationTime').textContent = 
+                        `REAL: ${now.toLocaleTimeString()}`;
+                }
             } catch (error) {
                 console.error('Time display error:', error);
             }
@@ -1759,6 +1784,11 @@
         function updateSystemStatus(status, isError = false) {
             const statusElement = document.getElementById('systemStatus');
             const dotElement = document.getElementById('systemDot');
+            
+            // Add simulation speed info if running
+            if (systemState && systemState.simulation_running) {
+                status += ` (${systemState.simulation_speed || 1.0}x)`;
+            }
             
             statusElement.textContent = status;
             

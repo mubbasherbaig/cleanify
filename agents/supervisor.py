@@ -32,6 +32,12 @@ class SupervisorAgent(AgentBase):
     def __init__(self):
         super().__init__("supervisor", "supervisor")
         
+        self.simulation_start_time = None  # When simulation started (real time)
+        self.simulation_current_time = None  # Current simulation time (starts at 8:00 AM)
+        self.simulation_running = False
+        self.simulation_speed = 1.0
+        self.last_update_time = None
+
         # Agent management
         self.managed_agents: Dict[str, AgentBase] = {}
         self.agent_tasks: Dict[str, asyncio.Task] = {}
@@ -39,9 +45,9 @@ class SupervisorAgent(AgentBase):
         
         # System state
         self.system_state: Optional[SystemState] = None
-        self.last_state_update = datetime.now()
-        self.simulation_running = False
-        self.simulation_speed = 1.0
+        # self.last_state_update = datetime.now()
+        # self.simulation_running = False
+        # self.simulation_speed = 1.0
         
         # Configuration
         self.settings = get_settings()
@@ -162,7 +168,14 @@ class SupervisorAgent(AgentBase):
         self.logger.info("All agents started")
     
     async def _initialize_system_state(self):
-        """Initialize empty system state"""
+        """Initialize empty system state with simulation time"""
+        # Set simulation start time to 8:00 AM today
+        from datetime import datetime, time
+        today = datetime.now().date()
+        simulation_start = datetime.combine(today, time(8, 0, 0))  # 8:00 AM
+        
+        self.simulation_current_time = simulation_start
+        
         self.system_state = SystemState(
             timestamp=datetime.now(),
             bins=[],
@@ -170,39 +183,100 @@ class SupervisorAgent(AgentBase):
             active_routes=[],
             traffic_conditions=[],
             simulation_running=False,
-            current_time=datetime.now()
+            current_time=self.simulation_current_time,
+            simulation_speed=1.0
         )
         
-        # Publish initial state
         await self._publish_system_state()
     
     async def _update_system_state(self):
-        """Update and publish system state"""
+        """Update system state with simulation time and bin filling"""
         if not self.system_state:
             return
         
-        # Update timestamp
-        self.system_state.timestamp = datetime.now()
+        real_now = datetime.now()
+        self.system_state.timestamp = real_now
         
-        # Update simulation time if running
+        # Update simulation time based on speed
         if self.simulation_running:
-            time_delta = (datetime.now() - self.last_state_update).total_seconds()
-            simulated_delta = time_delta * self.simulation_speed
+            if self.last_update_time is None:
+                self.last_update_time = real_now
             
-            if self.system_state.current_time:
-                self.system_state.current_time += timedelta(seconds=simulated_delta)
-            else:
-                self.system_state.current_time = datetime.now()
-        else:
-            self.system_state.current_time = datetime.now()
+            # Calculate elapsed real time since last update
+            real_elapsed = (real_now - self.last_update_time).total_seconds()
+            
+            # Apply simulation speed multiplier
+            sim_elapsed = real_elapsed * self.simulation_speed
+            
+            # Update simulation time
+            if self.simulation_current_time:
+                self.simulation_current_time += timedelta(seconds=sim_elapsed)
+                self.system_state.current_time = self.simulation_current_time
+            
+            # Update bin fill levels based on simulation time progression
+            await self._update_bin_fill_levels(sim_elapsed)
+            
+            self.last_update_time = real_now
         
         self.system_state.simulation_running = self.simulation_running
         self.system_state.simulation_speed = self.simulation_speed
         
-        # Publish updated state
         await self._publish_system_state()
-        self.last_state_update = datetime.now()
-    
+
+    async def _update_bin_fill_levels(self, sim_elapsed_seconds: float):
+        """Enhanced bin fill level update using hourly fill rates"""
+        if not self.system_state or not self.system_state.bins:
+            return
+        
+        sim_elapsed_hours = sim_elapsed_seconds / 3600.0
+        current_hour = self.simulation_current_time.hour
+        
+        print(f"🔧 FILL UPDATE: Simulation hour {current_hour}, elapsed {sim_elapsed_hours:.4f}h")
+        
+        for bin_obj in self.system_state.bins:
+            if getattr(bin_obj, 'being_collected', False):
+                continue
+            
+            old_fill = bin_obj.fill_level
+            
+            # Use hourly fill rates if available
+            if bin_obj.metadata.get("has_hourly_rates", False):
+                hourly_rates = bin_obj.metadata.get("hourly_fill_rates", {})
+                current_hour_rate = hourly_rates.get(current_hour, bin_obj.fill_rate_lph)
+                
+                # Calculate fill increase directly from hourly rate
+                fill_increase_liters = current_hour_rate * sim_elapsed_hours
+                
+            else:
+                # Fallback to generic time multiplier
+                hourly_rate = bin_obj.fill_rate_lph
+                time_multiplier = self._get_generic_time_multiplier(current_hour, bin_obj.bin_type)
+                effective_rate = hourly_rate * time_multiplier
+                fill_increase_liters = effective_rate * sim_elapsed_hours
+            
+            # Convert to percentage increase
+            if bin_obj.capacity_l > 0:
+                fill_increase_percent = (fill_increase_liters / bin_obj.capacity_l) * 100
+                new_fill_level = bin_obj.fill_level + fill_increase_percent
+                bin_obj.fill_level = min(150.0, new_fill_level)  # Cap at 150% for overflow
+                
+                # Update timestamp
+                bin_obj.last_updated = self.simulation_current_time
+                
+                # Debug logging for significant changes
+                if fill_increase_percent > 0.1:  # Only log significant changes
+                    rate_used = current_hour_rate if bin_obj.metadata.get("has_hourly_rates") else f"{effective_rate:.2f} (calculated)"
+                    print(f"📈 {bin_obj.id}: {old_fill:.1f}% → {bin_obj.fill_level:.1f}% (+{fill_increase_percent:.2f}%) @ {rate_used}L/h")
+
+    def _get_generic_time_multiplier(self, hour: int, bin_type) -> float:
+        """Fallback time multiplier for bins without hourly rates"""
+        # Commercial/street bins
+        if 8 <= hour <= 18:  # Business hours
+            return 1.5
+        elif 19 <= hour <= 22:  # Evening
+            return 0.8
+        else:  # Night/early morning
+            return 0.3
     async def _publish_system_state(self):
         """Publish system state to all agents"""
         if not self.system_state:
@@ -336,9 +410,9 @@ class SupervisorAgent(AgentBase):
         self.register_handler("route_planned", self._handle_route_planned)
     
     async def _handle_load_config(self, data: Dict[str, Any]):
-        """Handle configuration loading - REDIS-SAFE VERSION"""
+        """Handle configuration loading - ENHANCED WITH HOURLY RATES"""
         try:
-            print("🔧 SUPERVISOR: _handle_load_config called")
+            print("🔧 SUPERVISOR: _handle_load_config called (Enhanced Version)")
             config = data.get("config", {})
             print(f"🔧 SUPERVISOR: Processing config with {len(config.get('bins', []))} bins, {len(config.get('trucks', []))} trucks")
             
@@ -349,7 +423,7 @@ class SupervisorAgent(AgentBase):
             trucks_data = config.get("trucks", [])
             depot_data = config.get("depot", {})
             
-            # Parse bins
+            # Parse bins with enhanced hourly fill rate support
             bins = []
             for i, bin_data in enumerate(bins_data):
                 bin_obj = Bin(
@@ -359,12 +433,30 @@ class SupervisorAgent(AgentBase):
                     capacity_l=int(bin_data["capacity_l"]),
                     fill_level=float(bin_data.get("fill_level", 50.0)),
                     fill_rate_lph=float(bin_data.get("fill_rate_lph", 5.0)),
-                    tile_id=""
+                    tile_id="",
+                    bin_type=BinType.GENERAL  # Default, can be enhanced
                 )
+                
+                # NEW: Store hourly fill rates in metadata
+                hourly_rates = bin_data.get("hourly_fill_rates", {})
+                if hourly_rates:
+                    # Convert string keys to integers and store
+                    bin_obj.metadata["hourly_fill_rates"] = {
+                        int(hour): float(rate) for hour, rate in hourly_rates.items()
+                    }
+                    bin_obj.metadata["has_hourly_rates"] = True
+                    print(f"✅ SUPERVISOR: Bin {bin_obj.id} loaded with hourly rates (range: {min(hourly_rates.values()):.1f}-{max(hourly_rates.values()):.1f}L/h)")
+                else:
+                    bin_obj.metadata["has_hourly_rates"] = False
+                    print(f"⚠️ SUPERVISOR: Bin {bin_obj.id} using fallback rate: {bin_obj.fill_rate_lph}L/h")
+                
+                # Store additional metadata
+                bin_obj.metadata["daily_fill_total"] = bin_data.get("daily_fill_total", 0)
+                bin_obj.metadata["notes"] = bin_data.get("notes", "")
+                
                 bins.append(bin_obj)
-                print(f"✅ SUPERVISOR: Created bin {bin_obj.id}")
             
-            # Parse trucks
+            # Parse trucks (unchanged)
             trucks = []
             depot_lat = float(depot_data["latitude"])
             depot_lon = float(depot_data["longitude"])
@@ -380,7 +472,7 @@ class SupervisorAgent(AgentBase):
                 trucks.append(truck_obj)
                 print(f"✅ SUPERVISOR: Created truck {truck_obj.id}")
             
-            # CRITICAL: Update system state
+            # Update system state
             print(f"🔧 SUPERVISOR: Updating system state with {len(bins)} bins and {len(trucks)} trucks")
             
             if self.system_state is None:
@@ -401,59 +493,42 @@ class SupervisorAgent(AgentBase):
                 self.system_state.trucks = trucks
                 self.system_state.timestamp = datetime.now()
             
-            print(f"✅ SUPERVISOR: System state updated! Bins: {len(self.system_state.bins)}, Trucks: {len(self.system_state.trucks)}")
+            # Count bins with hourly rates
+            hourly_bins = len([b for b in bins if b.metadata.get("has_hourly_rates", False)])
+            print(f"✅ SUPERVISOR: System state updated! Bins: {len(self.system_state.bins)} ({hourly_bins} with hourly rates), Trucks: {len(self.system_state.trucks)}")
             
-            # SAFE MESSAGE SENDING: Only send messages if Redis client is available
+            # Safe message sending
             if hasattr(self, 'redis_client') and self.redis_client is not None:
-                print("🔧 SUPERVISOR: Redis client available, publishing system state...")
+                print("🔧 SUPERVISOR: Publishing system state...")
                 try:
                     await self._publish_system_state()
                     print("✅ SUPERVISOR: System state published successfully")
                 except Exception as e:
                     print(f"⚠️ SUPERVISOR: Failed to publish system state: {e}")
-                    # Continue anyway - the state is updated locally
-                
+                    
                 try:
-                    # Send success response
                     response_data = {
                         "status": "success",
                         "bins": len(bins),
                         "trucks": len(trucks),
+                        "hourly_rate_bins": hourly_bins,
                         "timestamp": datetime.now().isoformat()
                     }
                     await self.send_message("config_loaded", response_data)
                     print("✅ SUPERVISOR: Response message sent")
                 except Exception as e:
                     print(f"⚠️ SUPERVISOR: Failed to send response message: {e}")
-                    # Continue anyway - the config was loaded successfully
             else:
                 print("⚠️ SUPERVISOR: Redis client not available, skipping message publishing")
-                print("   (This is normal during testing)")
             
-            print(f"🎉 SUPERVISOR: Configuration loaded successfully!")
-            print(f"   Final verification: {len(self.system_state.bins)} bins, {len(self.system_state.trucks)} trucks in system state")
-            
-            return True  # Indicate success
+            print(f"🎉 SUPERVISOR: Enhanced configuration loaded successfully!")
+            return True
             
         except Exception as e:
             print(f"❌ SUPERVISOR: Configuration loading failed: {e}")
             import traceback
             traceback.print_exc()
-            
-            # SAFE ERROR MESSAGE SENDING
-            if hasattr(self, 'redis_client') and self.redis_client is not None:
-                try:
-                    await self.send_message(
-                        "config_loaded",
-                        {
-                            "status": "error",
-                            "error": str(e)
-                        }
-                    )
-                except Exception as msg_error:
-                    print(f"⚠️ SUPERVISOR: Could not send error message: {msg_error}")
-            
-            return False  # Indicate failure
+            return False
 
     async def _publish_system_state(self):
         """Publish system state to all agents - REDIS-SAFE VERSION"""
@@ -497,19 +572,59 @@ class SupervisorAgent(AgentBase):
         """Get current system state directly (for API access)"""
         return self.system_state
     
+    def _get_time_multiplier(self, hour: int, bin_type) -> float:
+        """Get time-of-day multiplier for fill rate"""
+        # Business hours pattern for commercial bins
+        if str(bin_type).lower() in ['commercial', 'general']:
+            if 8 <= hour <= 18:  # Business hours
+                return 1.5
+            elif 19 <= hour <= 22:  # Evening
+                return 0.8
+            else:  # Night/early morning
+                return 0.3
+        
+        # Residential pattern
+        elif str(bin_type).lower() == 'residential':
+            if hour in [7, 8, 18, 19, 20]:  # Peak times
+                return 2.0
+            elif 9 <= hour <= 17:  # Work hours (people away)
+                return 0.4
+            else:  # Night
+                return 0.2
+        
+        # Default pattern
+        return 1.0
+
     async def _handle_start_simulation(self, data: Dict[str, Any]):
-        """Handle simulation start"""
+        """Handle simulation start with proper time initialization"""
+        # Initialize simulation timing
+        self.simulation_start_time = datetime.now()
+        self.last_update_time = self.simulation_start_time
+        
+        # Set simulation time to 8:00 AM if not already set
+        if not self.simulation_current_time:
+            from datetime import time
+            today = datetime.now().date()
+            self.simulation_current_time = datetime.combine(today, time(8, 0, 0))
+        
         self.simulation_running = True
+        
+        print(f"🚀 SIMULATION: Started at {self.simulation_current_time.strftime('%H:%M:%S')}")
+        print(f"   Real start time: {self.simulation_start_time.strftime('%H:%M:%S')}")
+        print(f"   Speed: {self.simulation_speed}x")
         
         await self.send_message(
             "simulation_started",
             {
                 "status": "started",
-                "timestamp": datetime.now().isoformat()
+                "simulation_time": self.simulation_current_time.isoformat(),
+                "real_time": self.simulation_start_time.isoformat(),
+                "speed": self.simulation_speed
             }
         )
         
-        self.logger.info("Simulation started")
+        self.logger.info("Simulation started", 
+                        sim_time=self.simulation_current_time.strftime('%H:%M:%S'))
     
     async def _handle_pause_simulation(self, data: Dict[str, Any]):
         """Handle simulation pause"""
@@ -527,19 +642,65 @@ class SupervisorAgent(AgentBase):
     
     async def _handle_set_simulation_speed(self, data: Dict[str, Any]):
         """Handle simulation speed change"""
-        speed = data.get("speed", 1.0)
-        self.simulation_speed = max(0.1, min(10.0, speed))
+        new_speed = data.get("speed", 1.0)
+        old_speed = self.simulation_speed
+        
+        self.simulation_speed = max(0.1, min(10.0, new_speed))
+        
+        print(f"⚡ SIMULATION: Speed changed from {old_speed}x to {self.simulation_speed}x")
         
         await self.send_message(
             "simulation_speed_set",
             {
                 "speed": self.simulation_speed,
-                "timestamp": datetime.now().isoformat()
+                "old_speed": old_speed,
+                "simulation_time": self.simulation_current_time.isoformat() if self.simulation_current_time else None
             }
         )
         
-        self.logger.info("Simulation speed changed", speed=self.simulation_speed)
+        self.logger.info("Simulation speed changed", 
+                        old_speed=old_speed, 
+                        new_speed=self.simulation_speed)
     
+    def get_simulation_status(self) -> Dict[str, Any]:
+        """Enhanced simulation status with hourly rate info"""
+        status = {
+            "running": self.simulation_running,
+            "speed": self.simulation_speed,
+            "current_time": self.simulation_current_time.isoformat() if self.simulation_current_time else None,
+            "current_hour": self.simulation_current_time.hour if self.simulation_current_time else None,
+            "start_time": self.simulation_start_time.isoformat() if self.simulation_start_time else None
+        }
+        
+        # Add fill rate analysis
+        if self.system_state and self.system_state.bins:
+            bins_with_hourly = len([b for b in self.system_state.bins if b.metadata.get("has_hourly_rates", False)])
+            total_bins = len(self.system_state.bins)
+            
+            # Current hour rates
+            if self.simulation_current_time:
+                current_hour = self.simulation_current_time.hour
+                current_rates = []
+                
+                for bin_obj in self.system_state.bins:
+                    if bin_obj.metadata.get("has_hourly_rates", False):
+                        hourly_rates = bin_obj.metadata.get("hourly_fill_rates", {})
+                        current_rates.append(hourly_rates.get(current_hour, 0))
+                
+                if current_rates:
+                    status.update({
+                        "current_hour_avg_rate": sum(current_rates) / len(current_rates),
+                        "current_hour_rate_range": [min(current_rates), max(current_rates)]
+                    })
+            
+            status.update({
+                "bins_with_hourly_rates": bins_with_hourly,
+                "total_bins": total_bins,
+                "hourly_rate_coverage": f"{bins_with_hourly}/{total_bins}"
+            })
+        
+        return status
+
     async def _handle_get_agent_health(self, data: Dict[str, Any]):
         """Handle agent health request"""
         health_data = {
@@ -565,7 +726,7 @@ class SupervisorAgent(AgentBase):
         self.logger.info("Route planned", route_id=route_data.get("id"))
     
     def _bin_to_dict(self, bin_obj: Bin) -> Dict[str, Any]:
-        """Convert Bin object to dictionary - DEBUG VERSION"""
+        """Enhanced bin conversion with hourly rate metadata"""
         try:
             result = {
                 "id": bin_obj.id,
@@ -577,9 +738,25 @@ class SupervisorAgent(AgentBase):
                 "tile_id": bin_obj.tile_id,
                 "threshold": getattr(bin_obj, 'threshold', 85.0),
                 "assigned_truck": getattr(bin_obj, 'assigned_truck', None),
-                "being_collected": getattr(bin_obj, 'being_collected', False)
+                "being_collected": getattr(bin_obj, 'being_collected', False),
+                "last_updated": bin_obj.last_updated.isoformat() if getattr(bin_obj, 'last_updated', None) else None
             }
-            print(f"🔧 SUPERVISOR: _bin_to_dict result: {result}")
+            
+            # Add hourly rate info if available
+            if bin_obj.metadata.get("has_hourly_rates", False):
+                current_hour = self.simulation_current_time.hour if self.simulation_current_time else 8
+                hourly_rates = bin_obj.metadata.get("hourly_fill_rates", {})
+                current_rate = hourly_rates.get(current_hour, bin_obj.fill_rate_lph)
+                
+                result.update({
+                    "current_hourly_rate": current_rate,
+                    "has_hourly_rates": True,
+                    "daily_fill_total": bin_obj.metadata.get("daily_fill_total", 0),
+                    "notes": bin_obj.metadata.get("notes", "")
+                })
+            else:
+                result["has_hourly_rates"] = False
+            
             return result
         except Exception as e:
             print(f"❌ SUPERVISOR: _bin_to_dict failed: {e}")

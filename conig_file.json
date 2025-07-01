@@ -1,106 +1,261 @@
 {
+  "metadata": {
+    "generated_at": "2025-07-01T12:00:00Z",
+    "source": "Islamabad_20_Street_Bins_with_24_Hour_Fill_Rates.csv",
+    "description": "CORRECTED: Each bin has unique hourly fill patterns (3.33-4.92 L/h range)"
+  },
   "depot": {
-    "name": "Central Waste Depot",
+    "name": "Islamabad Central Depot",
     "latitude": 33.6844,
     "longitude": 73.0479
   },
   "trucks": [
-    {
-      "id": "T001",
-      "name": "Alpha Truck",
-      "capacity": 5000
-    },
-    {
-      "id": "T002", 
-      "name": "Beta Truck",
-      "capacity": 5000
-    },
-    {
-      "id": "T003",
-      "name": "Gamma Truck", 
-      "capacity": 4500
-    }
+    { "id": "T001", "name": "Alpha Truck", "capacity": 5000 },
+    { "id": "T002", "name": "Beta Truck", "capacity": 5000 },
+    { "id": "T003", "name": "Gamma Truck", "capacity": 4500 },
+    { "id": "T004", "name": "Delta Truck", "capacity": 4500 },
+    { "id": "T005", "name": "Echo Truck", "capacity": 5500 }
   ],
   "bins": [
     {
-      "id": "BIN001",
-      "latitude": 33.6844,
-      "longitude": 73.0479,
+      "id": "SB01",
+      "latitude": 33.695597,
+      "longitude": 73.045436,
       "capacity_l": 100,
-      "fill_level": 75.0,
-      "fill_rate_lph": 3.0
+      "fill_level": 45.2,
+      "fill_rate_lph": 3.5,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – mixed-use/commercial area",
+      "hourly_fill_rates": { "0": 0.84, "1": 0.84, "2": 0.84, "3": 0.84, "4": 0.84, "5": 0.84, "6": 1.68, "7": 1.68, "8": 1.68, "9": 1.68, "10": 5.88, "11": 5.88, "12": 5.88, "13": 5.88, "14": 5.88, "15": 4.2, "16": 4.2, "17": 4.2, "18": 5.04, "19": 5.04, "20": 5.04, "21": 5.04, "22": 5.04, "23": 5.04 },
+      "daily_fill_total": 84
     },
     {
-      "id": "BIN002", 
-      "latitude": 33.6854,
-      "longitude": 73.0489,
+      "id": "SB02",
+      "latitude": 33.69554,
+      "longitude": 73.045479,
       "capacity_l": 100,
-      "fill_level": 85.0,
-      "fill_rate_lph": 2.5
+      "fill_level": 62.1,
+      "fill_rate_lph": 4.29,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – mixed-use/commercial area",
+      "hourly_fill_rates": { "0": 1.03, "1": 1.03, "2": 1.03, "3": 1.03, "4": 1.03, "5": 1.03, "6": 2.06, "7": 2.06, "8": 2.06, "9": 2.06, "10": 7.21, "11": 7.21, "12": 7.21, "13": 7.21, "14": 7.21, "15": 5.15, "16": 5.15, "17": 5.15, "18": 6.18, "19": 6.18, "20": 6.18, "21": 6.18, "22": 6.18, "23": 6.18 },
+      "daily_fill_total": 103
     },
     {
-      "id": "BIN003",
-      "latitude": 33.6834,
-      "longitude": 73.0469,
+      "id": "SB03",
+      "latitude": 33.695482,
+      "longitude": 73.045522,
       "capacity_l": 100,
-      "fill_level": 90.0,
-      "fill_rate_lph": 4.0
+      "fill_level": 38.7,
+      "fill_rate_lph": 4.29,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – mixed-use/commercial area",
+      "hourly_fill_rates": { "0": 1.03, "1": 1.03, "2": 1.03, "3": 1.03, "4": 1.03, "5": 1.03, "6": 2.06, "7": 2.06, "8": 2.06, "9": 2.06, "10": 7.21, "11": 7.21, "12": 7.21, "13": 7.21, "14": 7.21, "15": 5.15, "16": 5.15, "17": 5.15, "18": 6.18, "19": 6.18, "20": 6.18, "21": 6.18, "22": 6.18, "23": 6.18 },
+      "daily_fill_total": 103
     },
     {
-      "id": "BIN004",
-      "latitude": 33.6864,
-      "longitude": 73.0499,
+      "id": "SB04",
+      "latitude": 33.695425,
+      "longitude": 73.045565,
       "capacity_l": 100,
-      "fill_level": 60.0,
-      "fill_rate_lph": 2.0
+      "fill_level": 71.3,
+      "fill_rate_lph": 4.42,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – mixed-use/commercial area",
+      "hourly_fill_rates": { "0": 1.06, "1": 1.06, "2": 1.06, "3": 1.06, "4": 1.06, "5": 1.06, "6": 2.12, "7": 2.12, "8": 2.12, "9": 2.12, "10": 7.42, "11": 7.42, "12": 7.42, "13": 7.42, "14": 7.42, "15": 5.3, "16": 5.3, "17": 5.3, "18": 6.36, "19": 6.36, "20": 6.36, "21": 6.36, "22": 6.36, "23": 6.36 },
+      "daily_fill_total": 106
     },
     {
-      "id": "BIN005",
-      "latitude": 33.6824,
-      "longitude": 73.0459,
+      "id": "SB05",
+      "latitude": 33.695368,
+      "longitude": 73.045608,
       "capacity_l": 100,
-      "fill_level": 95.0,
-      "fill_rate_lph": 3.5
+      "fill_level": 52.9,
+      "fill_rate_lph": 3.62,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – mixed-use/commercial area",
+      "hourly_fill_rates": { "0": 0.87, "1": 0.87, "2": 0.87, "3": 0.87, "4": 0.87, "5": 0.87, "6": 1.74, "7": 1.74, "8": 1.74, "9": 1.74, "10": 6.09, "11": 6.09, "12": 6.09, "13": 6.09, "14": 6.09, "15": 4.35, "16": 4.35, "17": 4.35, "18": 5.22, "19": 5.22, "20": 5.22, "21": 5.22, "22": 5.22, "23": 5.22 },
+      "daily_fill_total": 87
     },
     {
-      "id": "BIN006",
-      "latitude": 33.6874,
-      "longitude": 73.0509,
+      "id": "SB06",
+      "latitude": 33.695311,
+      "longitude": 73.045651,
       "capacity_l": 100,
-      "fill_level": 70.0,
-      "fill_rate_lph": 2.8
+      "fill_level": 35.6,
+      "fill_rate_lph": 3.58,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – mixed-use/commercial area",
+      "hourly_fill_rates": { "0": 0.86, "1": 0.86, "2": 0.86, "3": 0.86, "4": 0.86, "5": 0.86, "6": 1.72, "7": 1.72, "8": 1.72, "9": 1.72, "10": 6.02, "11": 6.02, "12": 6.02, "13": 6.02, "14": 6.02, "15": 4.3, "16": 4.3, "17": 4.3, "18": 5.16, "19": 5.16, "20": 5.16, "21": 5.16, "22": 5.16, "23": 5.16 },
+      "daily_fill_total": 86
     },
     {
-      "id": "BIN007",
-      "latitude": 33.6814,
-      "longitude": 73.0449,
+      "id": "SB07",
+      "latitude": 33.695254,
+      "longitude": 73.045694,
       "capacity_l": 100,
-      "fill_level": 80.0,
-      "fill_rate_lph": 3.2
+      "fill_level": 68.4,
+      "fill_rate_lph": 3.54,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – mixed-use/commercial area",
+      "hourly_fill_rates": { "0": 0.85, "1": 0.85, "2": 0.85, "3": 0.85, "4": 0.85, "5": 0.85, "6": 1.7, "7": 1.7, "8": 1.7, "9": 1.7, "10": 5.95, "11": 5.95, "12": 5.95, "13": 5.95, "14": 5.95, "15": 4.25, "16": 4.25, "17": 4.25, "18": 5.1, "19": 5.1, "20": 5.1, "21": 5.1, "22": 5.1, "23": 5.1 },
+      "daily_fill_total": 85
     },
     {
-      "id": "BIN008",
-      "latitude": 33.6884,
-      "longitude": 73.0519,
+      "id": "SB08",
+      "latitude": 33.695197,
+      "longitude": 73.045737,
       "capacity_l": 100,
-      "fill_level": 88.0,
-      "fill_rate_lph": 4.1
+      "fill_level": 41.7,
+      "fill_rate_lph": 3.33,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – mixed-use/commercial area",
+      "hourly_fill_rates": { "0": 0.8, "1": 0.8, "2": 0.8, "3": 0.8, "4": 0.8, "5": 0.8, "6": 1.6, "7": 1.6, "8": 1.6, "9": 1.6, "10": 5.6, "11": 5.6, "12": 5.6, "13": 5.6, "14": 5.6, "15": 4, "16": 4, "17": 4, "18": 4.8, "19": 4.8, "20": 4.8, "21": 4.8, "22": 4.8, "23": 4.8 },
+      "daily_fill_total": 80
     },
     {
-      "id": "BIN009",
-      "latitude": 33.6804,
-      "longitude": 73.0439,
+      "id": "SB09",
+      "latitude": 33.69514,
+      "longitude": 73.04578,
       "capacity_l": 100,
-      "fill_level": 65.0,
-      "fill_rate_lph": 2.2
+      "fill_level": 59.2,
+      "fill_rate_lph": 4.92,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – mixed-use/commercial area",
+      "hourly_fill_rates": { "0": 1.18, "1": 1.18, "2": 1.18, "3": 1.18, "4": 1.18, "5": 1.18, "6": 2.36, "7": 2.36, "8": 2.36, "9": 2.36, "10": 8.26, "11": 8.26, "12": 8.26, "13": 8.26, "14": 8.26, "15": 5.9, "16": 5.9, "17": 5.9, "18": 7.08, "19": 7.08, "20": 7.08, "21": 7.08, "22": 7.08, "23": 7.08 },
+      "daily_fill_total": 118
     },
     {
-      "id": "BIN010",
-      "latitude": 33.6894,
-      "longitude": 73.0529,
+      "id": "SB10",
+      "latitude": 33.695083,
+      "longitude": 73.045823,
       "capacity_l": 100,
-      "fill_level": 92.0,
-      "fill_rate_lph": 3.8
+      "fill_level": 76.8,
+      "fill_rate_lph": 4.79,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – mixed-use/commercial area",
+      "hourly_fill_rates": { "0": 1.15, "1": 1.15, "2": 1.15, "3": 1.15, "4": 1.15, "5": 1.15, "6": 2.3, "7": 2.3, "8": 2.3, "9": 2.3, "10": 8.05, "11": 8.05, "12": 8.05, "13": 8.05, "14": 8.05, "15": 5.75, "16": 5.75, "17": 5.75, "18": 6.9, "19": 6.9, "20": 6.9, "21": 6.9, "22": 6.9, "23": 6.9 },
+      "daily_fill_total": 115
+    },
+    {
+      "id": "SB11",
+      "latitude": 33.695026,
+      "longitude": 73.045866,
+      "capacity_l": 100,
+      "fill_level": 44.1,
+      "fill_rate_lph": 3.38,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – commercial area",
+      "hourly_fill_rates": { "0": 0.81, "1": 0.81, "2": 0.81, "3": 0.81, "4": 0.81, "5": 0.81, "6": 1.62, "7": 1.62, "8": 1.62, "9": 1.62, "10": 5.67, "11": 5.67, "12": 5.67, "13": 5.67, "14": 5.67, "15": 4.05, "16": 4.05, "17": 4.05, "18": 4.86, "19": 4.86, "20": 4.86, "21": 4.86, "22": 4.86, "23": 4.86 },
+      "daily_fill_total": 81
+    },
+    {
+      "id": "SB12",
+      "latitude": 33.694968,
+      "longitude": 73.045909,
+      "capacity_l": 100,
+      "fill_level": 63.5,
+      "fill_rate_lph": 4.54,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – commercial area",
+      "hourly_fill_rates": { "0": 1.09, "1": 1.09, "2": 1.09, "3": 1.09, "4": 1.09, "5": 1.09, "6": 2.18, "7": 2.18, "8": 2.18, "9": 2.18, "10": 7.63, "11": 7.63, "12": 7.63, "13": 7.63, "14": 7.63, "15": 5.45, "16": 5.45, "17": 5.45, "18": 6.54, "19": 6.54, "20": 6.54, "21": 6.54, "22": 6.54, "23": 6.54 },
+      "daily_fill_total": 109
+    },
+    {
+      "id": "SB13",
+      "latitude": 33.694911,
+      "longitude": 73.045952,
+      "capacity_l": 100,
+      "fill_level": 31.8,
+      "fill_rate_lph": 4.29,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – commercial area",
+      "hourly_fill_rates": { "0": 1.03, "1": 1.03, "2": 1.03, "3": 1.03, "4": 1.03, "5": 1.03, "6": 2.06, "7": 2.06, "8": 2.06, "9": 2.06, "10": 7.21, "11": 7.21, "12": 7.21, "13": 7.21, "14": 7.21, "15": 5.15, "16": 5.15, "17": 5.15, "18": 6.18, "19": 6.18, "20": 6.18, "21": 6.18, "22": 6.18, "23": 6.18 },
+      "daily_fill_total": 103
+    },
+    {
+      "id": "SB14",
+      "latitude": 33.694854,
+      "longitude": 73.045995,
+      "capacity_l": 100,
+      "fill_level": 72.9,
+      "fill_rate_lph": 3.62,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – commercial area",
+      "hourly_fill_rates": { "0": 0.87, "1": 0.87, "2": 0.87, "3": 0.87, "4": 0.87, "5": 0.87, "6": 1.74, "7": 1.74, "8": 1.74, "9": 1.74, "10": 6.09, "11": 6.09, "12": 6.09, "13": 6.09, "14": 6.09, "15": 4.35, "16": 4.35, "17": 4.35, "18": 5.22, "19": 5.22, "20": 5.22, "21": 5.22, "22": 5.22, "23": 5.22 },
+      "daily_fill_total": 87
+    },
+    {
+      "id": "SB15",
+      "latitude": 33.694797,
+      "longitude": 73.046038,
+      "capacity_l": 100,
+      "fill_level": 57.4,
+      "fill_rate_lph": 4.21,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – commercial area",
+      "hourly_fill_rates": { "0": 1.01, "1": 1.01, "2": 1.01, "3": 1.01, "4": 1.01, "5": 1.01, "6": 2.02, "7": 2.02, "8": 2.02, "9": 2.02, "10": 7.07, "11": 7.07, "12": 7.07, "13": 7.07, "14": 7.07, "15": 5.05, "16": 5.05, "17": 5.05, "18": 6.06, "19": 6.06, "20": 6.06, "21": 6.06, "22": 6.06, "23": 6.06 },
+      "daily_fill_total": 101
+    },
+    {
+      "id": "SB16",
+      "latitude": 33.69474,
+      "longitude": 73.046081,
+      "capacity_l": 100,
+      "fill_level": 48.3,
+      "fill_rate_lph": 4.46,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – commercial area",
+      "hourly_fill_rates": { "0": 1.07, "1": 1.07, "2": 1.07, "3": 1.07, "4": 1.07, "5": 1.07, "6": 2.14, "7": 2.14, "8": 2.14, "9": 2.14, "10": 7.49, "11": 7.49, "12": 7.49, "13": 7.49, "14": 7.49, "15": 5.35, "16": 5.35, "17": 5.35, "18": 6.42, "19": 6.42, "20": 6.42, "21": 6.42, "22": 6.42, "23": 6.42 },
+      "daily_fill_total": 107
+    },
+    {
+      "id": "SB17",
+      "latitude": 33.694683,
+      "longitude": 73.046124,
+      "capacity_l": 100,
+      "fill_level": 65.7,
+      "fill_rate_lph": 4.12,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – commercial area",
+      "hourly_fill_rates": { "0": 0.99, "1": 0.99, "2": 0.99, "3": 0.99, "4": 0.99, "5": 0.99, "6": 1.98, "7": 1.98, "8": 1.98, "9": 1.98, "10": 6.93, "11": 6.93, "12": 6.93, "13": 6.93, "14": 6.93, "15": 4.95, "16": 4.95, "17": 4.95, "18": 5.94, "19": 5.94, "20": 5.94, "21": 5.94, "22": 5.94, "23": 5.94 },
+      "daily_fill_total": 99
+    },
+    {
+      "id": "SB18",
+      "latitude": 33.694626,
+      "longitude": 73.046167,
+      "capacity_l": 100,
+      "fill_level": 39.6,
+      "fill_rate_lph": 4.88,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – commercial area",
+      "hourly_fill_rates": { "0": 1.17, "1": 1.17, "2": 1.17, "3": 1.17, "4": 1.17, "5": 1.17, "6": 2.34, "7": 2.34, "8": 2.34, "9": 2.34, "10": 8.19, "11": 8.19, "12": 8.19, "13": 8.19, "14": 8.19, "15": 5.85, "16": 5.85, "17": 5.85, "18": 7.02, "19": 7.02, "20": 7.02, "21": 7.02, "22": 7.02, "23": 7.02 },
+      "daily_fill_total": 117
+    },
+    {
+      "id": "SB19",
+      "latitude": 33.694569,
+      "longitude": 73.04621,
+      "capacity_l": 100,
+      "fill_level": 51.2,
+      "fill_rate_lph": 4.62,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – commercial area",
+      "hourly_fill_rates": { "0": 1.11, "1": 1.11, "2": 1.11, "3": 1.11, "4": 1.11, "5": 1.11, "6": 2.22, "7": 2.22, "8": 2.22, "9": 2.22, "10": 7.77, "11": 7.77, "12": 7.77, "13": 7.77, "14": 7.77, "15": 5.55, "16": 5.55, "17": 5.55, "18": 6.66, "19": 6.66, "20": 6.66, "21": 6.66, "22": 6.66, "23": 6.66 },
+      "daily_fill_total": 111
+    },
+    {
+      "id": "SB20",
+      "latitude": 33.694512,
+      "longitude": 73.046253,
+      "capacity_l": 100,
+      "fill_level": 78.1,
+      "fill_rate_lph": 4.21,
+      "bin_type": "street_bin",
+      "notes": "Street litter bin – commercial area",
+      "hourly_fill_rates": { "0": 1.01, "1": 1.01, "2": 1.01, "3": 1.01, "4": 1.01, "5": 1.01, "6": 2.02, "7": 2.02, "8": 2.02, "9": 2.02, "10": 7.07, "11": 7.07, "12": 7.07, "13": 7.07, "14": 7.07, "15": 5.05, "16": 5.05, "17": 5.05, "18": 6.06, "19": 6.06, "20": 6.06, "21": 6.06, "22": 6.06, "23": 6.06 },
+      "daily_fill_total": 101
     }
   ]
 }
