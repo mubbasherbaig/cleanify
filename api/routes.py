@@ -135,41 +135,26 @@ async def root():
     }
 @app.get("/api/debug/system-state", tags=["Debug"])
 async def debug_system_state():
-    """Debug endpoint to see raw system state"""
+    """Debug endpoint to check system state"""
     
     if not supervisor:
         return {"error": "Supervisor not available"}
     
     try:
-        raw_state = {
-            "supervisor_available": supervisor is not None,
-            "system_state_exists": supervisor.system_state is not None,
-            "timestamp": datetime.now().isoformat()
-        }
+        state_exists = supervisor.system_state is not None
+        bins_count = len(supervisor.system_state.bins) if supervisor.system_state else 0
+        trucks_count = len(supervisor.system_state.trucks) if supervisor.system_state else 0
         
-        if supervisor.system_state:
-            raw_state.update({
-                "bins_count": len(supervisor.system_state.bins),
-                "trucks_count": len(supervisor.system_state.trucks),
-                "active_routes_count": len(supervisor.system_state.active_routes),
-                "simulation_running": supervisor.system_state.simulation_running,
-                "last_update": supervisor.system_state.timestamp.isoformat() if supervisor.system_state.timestamp else None
-            })
-            
-            # Add sample data for debugging
-            if supervisor.system_state.bins:
-                raw_state["sample_bin"] = supervisor._bin_to_dict(supervisor.system_state.bins[0])
-            
-            if supervisor.system_state.trucks:
-                raw_state["sample_truck"] = supervisor._truck_to_dict(supervisor.system_state.trucks[0])
-        
-        return raw_state
-        
-    except Exception as e:
         return {
-            "error": f"Debug error: {str(e)}",
-            "timestamp": datetime.now().isoformat()
+            "system_state_exists": state_exists,
+            "bins_count": bins_count,
+            "trucks_count": trucks_count,
+            "simulation_running": supervisor.simulation_running,
+            "simulation_current_time": supervisor.simulation_current_time.isoformat() if supervisor.simulation_current_time else None,
+            "depot_info": getattr(supervisor, 'depot_info', {})
         }
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.post("/api/debug/reload-config", tags=["Debug"])
 async def debug_reload_config():
@@ -358,21 +343,14 @@ async def start_simulation():
         )
     
     try:
-        await supervisor.send_message("start_simulation", {})
-        
-        return {
-            "status": "started",
-            "timestamp": datetime.now().isoformat(),
-            "message": "Simulation started successfully"
-        }
-        
+        result = await supervisor._handle_start_simulation({})
+        return result
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error starting simulation: {str(e)}"
+            detail=f"Failed to start simulation: {str(e)}"
         )
-
-
+    
 @app.post("/api/simulation/pause", tags=["Simulation"])
 async def pause_simulation():
     """Pause simulation"""
@@ -384,49 +362,27 @@ async def pause_simulation():
         )
     
     try:
-        await supervisor.send_message("pause_simulation", {})
-        
-        return {
-            "status": "paused",
-            "timestamp": datetime.now().isoformat(),
-            "message": "Simulation paused successfully"
-        }
-        
+        result = await supervisor._handle_pause_simulation({})
+        return result
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error pausing simulation: {str(e)}"
+            detail=f"Failed to pause simulation: {str(e)}"
         )
 
 
 @app.post("/api/simulation/speed", tags=["Simulation"])
-async def set_simulation_speed(speed_request: SimulationSpeedRequest):
-    """Set simulation speed multiplier"""
-    
+async def set_simulation_speed(speed_data: dict):
+    """Set simulation speed"""
     if not supervisor:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supervisor not available"
-        )
+        raise HTTPException(status_code=503, detail="Supervisor not available")
     
     try:
-        await supervisor.send_message(
-            "set_simulation_speed",
-            {"speed": speed_request.multiplier}
-        )
-        
-        return {
-            "status": "success",
-            "speed": speed_request.multiplier,
-            "timestamp": datetime.now().isoformat(),
-            "message": f"Simulation speed set to {speed_request.multiplier}x"
-        }
-        
+        # Call supervisor handler directly instead of message passing
+        result = await supervisor._handle_set_simulation_speed(speed_data)
+        return result
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error setting simulation speed: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/dispatch/plan", tags=["Operations"])
@@ -458,6 +414,149 @@ async def plan_routes():
             detail=f"Error triggering route planning: {str(e)}"
         )
 
+@app.post("/api/routes/trigger", tags=["Operations"]) 
+async def trigger_route_planning():
+    """Manually trigger route planning"""
+    
+    if not supervisor:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Supervisor not available"
+        )
+    
+    try:
+        print("🚀 API: Manual route planning trigger requested")
+        
+        if not supervisor.system_state:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No system state available"
+            )
+        
+        # Find urgent bins
+        urgent_bins = [b for b in supervisor.system_state.bins if b.fill_level >= 85.0]
+        available_trucks = [t for t in supervisor.system_state.trucks if t.status == TruckStatus.IDLE]
+        
+        print(f"🎯 API: Found {len(urgent_bins)} urgent bins, {len(available_trucks)} available trucks")
+        
+        if urgent_bins and available_trucks:
+            await supervisor._trigger_route_planning_direct(urgent_bins, available_trucks)
+            
+            return {
+                "status": "success",
+                "routes_created": min(len(urgent_bins), len(available_trucks)),
+                "urgent_bins": len(urgent_bins),
+                "available_trucks": len(available_trucks),
+                "message": "Route planning triggered successfully"
+            }
+        else:
+            return {
+                "status": "no_action",
+                "urgent_bins": len(urgent_bins),
+                "available_trucks": len(available_trucks),
+                "message": "No urgent bins or available trucks"
+            }
+            
+    except Exception as e:
+        print(f"❌ API: Route planning error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Route planning error: {str(e)}"
+        )
+
+@app.get("/api/routes/status", tags=["Operations"])
+async def get_route_status():
+    """Get current route status"""
+    
+    if not supervisor or not supervisor.system_state:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="System not available"
+        )
+    
+    try:
+        trucks = supervisor.system_state.trucks
+        bins = supervisor.system_state.bins
+        
+        # Analyze current status
+        total_trucks = len(trucks)
+        idle_trucks = len([t for t in trucks if t.status == TruckStatus.IDLE])
+        active_trucks = len([t for t in trucks if t.status == TruckStatus.EN_ROUTE])
+        
+        total_bins = len(bins)
+        urgent_bins = len([b for b in bins if b.fill_level >= 85.0])
+        critical_bins = len([b for b in bins if b.fill_level >= 120.0])
+        being_collected = len([b for b in bins if b.being_collected])
+        
+        return {
+            "trucks": {
+                "total": total_trucks,
+                "idle": idle_trucks,
+                "active": active_trucks,
+                "utilization": (active_trucks / total_trucks * 100) if total_trucks > 0 else 0
+            },
+            "bins": {
+                "total": total_bins,
+                "urgent": urgent_bins,
+                "critical": critical_bins,
+                "being_collected": being_collected
+            },
+            "system": {
+                "routes_planned": supervisor.routes_planned,
+                "emergencies_handled": supervisor.emergencies_handled,
+                "simulation_running": supervisor.simulation_running
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting route status: {str(e)}"
+        )
+
+@app.post("/api/simulation/reset", tags=["Simulation"])
+async def reset_simulation():
+    """Reset simulation state"""
+    
+    if not supervisor or not supervisor.system_state:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="System not available"
+        )
+    
+    try:
+        print("🔄 API: Resetting simulation state")
+        
+        # Reset truck states
+        for truck in supervisor.system_state.trucks:
+            truck.status = TruckStatus.IDLE
+            truck.route_id = None
+            truck.current_load_l = 0
+        
+        # Reset bin states  
+        for bin_obj in supervisor.system_state.bins:
+            bin_obj.being_collected = False
+            bin_obj.assigned_truck = None
+        
+        # Reset supervisor metrics
+        supervisor.routes_planned = 0
+        supervisor.emergencies_handled = 0
+        supervisor.decisions_made = 0
+        
+        print("✅ API: Simulation state reset")
+        
+        return {
+            "status": "success",
+            "message": "Simulation state reset successfully",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error resetting simulation: {str(e)}"
+        )
 
 @app.post("/api/dispatch/manual", tags=["Operations"])
 async def manual_dispatch(dispatch_request: DispatchRequest):
