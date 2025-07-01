@@ -133,7 +133,73 @@ async def root():
         "agents": "agent-based architecture",
         "optimization": "OR-Tools + Redis Streams"
     }
+@app.get("/api/debug/system-state", tags=["Debug"])
+async def debug_system_state():
+    """Debug endpoint to see raw system state"""
+    
+    if not supervisor:
+        return {"error": "Supervisor not available"}
+    
+    try:
+        raw_state = {
+            "supervisor_available": supervisor is not None,
+            "system_state_exists": supervisor.system_state is not None,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if supervisor.system_state:
+            raw_state.update({
+                "bins_count": len(supervisor.system_state.bins),
+                "trucks_count": len(supervisor.system_state.trucks),
+                "active_routes_count": len(supervisor.system_state.active_routes),
+                "simulation_running": supervisor.system_state.simulation_running,
+                "last_update": supervisor.system_state.timestamp.isoformat() if supervisor.system_state.timestamp else None
+            })
+            
+            # Add sample data for debugging
+            if supervisor.system_state.bins:
+                raw_state["sample_bin"] = supervisor._bin_to_dict(supervisor.system_state.bins[0])
+            
+            if supervisor.system_state.trucks:
+                raw_state["sample_truck"] = supervisor._truck_to_dict(supervisor.system_state.trucks[0])
+        
+        return raw_state
+        
+    except Exception as e:
+        return {
+            "error": f"Debug error: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }
 
+@app.post("/api/debug/reload-config", tags=["Debug"])
+async def debug_reload_config():
+    """Force reload last configuration"""
+    
+    if not supervisor:
+        raise HTTPException(status_code=503, detail="Supervisor not available")
+    
+    try:
+        # This would reload the last known good config
+        # For now, just return the current state
+        if supervisor.system_state:
+            return {
+                "status": "current_state",
+                "bins": len(supervisor.system_state.bins),
+                "trucks": len(supervisor.system_state.trucks),
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            return {
+                "status": "no_state",
+                "message": "No system state available",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Debug reload error: {str(e)}"
+        )
 
 @app.get("/api/system-state", response_model=SystemStateResponse, tags=["System"])
 async def get_system_state():

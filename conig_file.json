@@ -1,0 +1,106 @@
+{
+  "depot": {
+    "name": "Central Waste Depot",
+    "latitude": 33.6844,
+    "longitude": 73.0479
+  },
+  "trucks": [
+    {
+      "id": "T001",
+      "name": "Alpha Truck",
+      "capacity": 5000
+    },
+    {
+      "id": "T002", 
+      "name": "Beta Truck",
+      "capacity": 5000
+    },
+    {
+      "id": "T003",
+      "name": "Gamma Truck", 
+      "capacity": 4500
+    }
+  ],
+  "bins": [
+    {
+      "id": "BIN001",
+      "latitude": 33.6844,
+      "longitude": 73.0479,
+      "capacity_l": 100,
+      "fill_level": 75.0,
+      "fill_rate_lph": 3.0
+    },
+    {
+      "id": "BIN002", 
+      "latitude": 33.6854,
+      "longitude": 73.0489,
+      "capacity_l": 100,
+      "fill_level": 85.0,
+      "fill_rate_lph": 2.5
+    },
+    {
+      "id": "BIN003",
+      "latitude": 33.6834,
+      "longitude": 73.0469,
+      "capacity_l": 100,
+      "fill_level": 90.0,
+      "fill_rate_lph": 4.0
+    },
+    {
+      "id": "BIN004",
+      "latitude": 33.6864,
+      "longitude": 73.0499,
+      "capacity_l": 100,
+      "fill_level": 60.0,
+      "fill_rate_lph": 2.0
+    },
+    {
+      "id": "BIN005",
+      "latitude": 33.6824,
+      "longitude": 73.0459,
+      "capacity_l": 100,
+      "fill_level": 95.0,
+      "fill_rate_lph": 3.5
+    },
+    {
+      "id": "BIN006",
+      "latitude": 33.6874,
+      "longitude": 73.0509,
+      "capacity_l": 100,
+      "fill_level": 70.0,
+      "fill_rate_lph": 2.8
+    },
+    {
+      "id": "BIN007",
+      "latitude": 33.6814,
+      "longitude": 73.0449,
+      "capacity_l": 100,
+      "fill_level": 80.0,
+      "fill_rate_lph": 3.2
+    },
+    {
+      "id": "BIN008",
+      "latitude": 33.6884,
+      "longitude": 73.0519,
+      "capacity_l": 100,
+      "fill_level": 88.0,
+      "fill_rate_lph": 4.1
+    },
+    {
+      "id": "BIN009",
+      "latitude": 33.6804,
+      "longitude": 73.0439,
+      "capacity_l": 100,
+      "fill_level": 65.0,
+      "fill_rate_lph": 2.2
+    },
+    {
+      "id": "BIN010",
+      "latitude": 33.6894,
+      "longitude": 73.0529,
+      "capacity_l": 100,
+      "fill_level": 92.0,
+      "fill_rate_lph": 3.8
+    }
+  ]
+}

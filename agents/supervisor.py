@@ -336,63 +336,166 @@ class SupervisorAgent(AgentBase):
         self.register_handler("route_planned", self._handle_route_planned)
     
     async def _handle_load_config(self, data: Dict[str, Any]):
-        """Handle configuration loading"""
+        """Handle configuration loading - REDIS-SAFE VERSION"""
         try:
+            print("🔧 SUPERVISOR: _handle_load_config called")
             config = data.get("config", {})
+            print(f"🔧 SUPERVISOR: Processing config with {len(config.get('bins', []))} bins, {len(config.get('trucks', []))} trucks")
+            
+            if not config:
+                raise ValueError("No config data received")
+            
+            bins_data = config.get("bins", [])
+            trucks_data = config.get("trucks", [])
+            depot_data = config.get("depot", {})
             
             # Parse bins
             bins = []
-            for bin_data in config.get("bins", []):
+            for i, bin_data in enumerate(bins_data):
                 bin_obj = Bin(
-                    id=bin_data["id"],
-                    lat=bin_data["latitude"],
-                    lon=bin_data["longitude"],
-                    capacity_l=bin_data["capacity"],
-                    fill_level=bin_data.get("fill_level", 50.0),
-                    fill_rate_lph=bin_data.get("fill_rate", 5.0),
-                    tile_id=""  # Will be calculated
+                    id=str(bin_data["id"]),
+                    lat=float(bin_data["latitude"]),
+                    lon=float(bin_data["longitude"]), 
+                    capacity_l=int(bin_data["capacity_l"]),
+                    fill_level=float(bin_data.get("fill_level", 50.0)),
+                    fill_rate_lph=float(bin_data.get("fill_rate_lph", 5.0)),
+                    tile_id=""
                 )
                 bins.append(bin_obj)
+                print(f"✅ SUPERVISOR: Created bin {bin_obj.id}")
             
             # Parse trucks
             trucks = []
-            for truck_data in config.get("trucks", []):
+            depot_lat = float(depot_data["latitude"])
+            depot_lon = float(depot_data["longitude"])
+            
+            for i, truck_data in enumerate(trucks_data):
                 truck_obj = Truck(
-                    id=truck_data["id"],
-                    name=truck_data["name"],
-                    capacity_l=truck_data["capacity"],
-                    lat=config["depot"]["latitude"],
-                    lon=config["depot"]["longitude"]
+                    id=str(truck_data["id"]),
+                    name=str(truck_data["name"]),
+                    capacity_l=int(truck_data["capacity"]),
+                    lat=depot_lat,
+                    lon=depot_lon
                 )
                 trucks.append(truck_obj)
+                print(f"✅ SUPERVISOR: Created truck {truck_obj.id}")
             
-            # Update system state
-            if self.system_state:
+            # CRITICAL: Update system state
+            print(f"🔧 SUPERVISOR: Updating system state with {len(bins)} bins and {len(trucks)} trucks")
+            
+            if self.system_state is None:
+                print("🔧 SUPERVISOR: Creating new SystemState")
+                from core.models import SystemState
+                self.system_state = SystemState(
+                    timestamp=datetime.now(),
+                    bins=bins,
+                    trucks=trucks,
+                    active_routes=[],
+                    traffic_conditions=[],
+                    simulation_running=False,
+                    current_time=datetime.now()
+                )
+            else:
+                print("🔧 SUPERVISOR: Updating existing SystemState")
                 self.system_state.bins = bins
                 self.system_state.trucks = trucks
-                await self._publish_system_state()
+                self.system_state.timestamp = datetime.now()
             
-            await self.send_message(
-                "config_loaded",
-                {
-                    "status": "success",
-                    "bins": len(bins),
-                    "trucks": len(trucks)
-                }
-            )
+            print(f"✅ SUPERVISOR: System state updated! Bins: {len(self.system_state.bins)}, Trucks: {len(self.system_state.trucks)}")
             
-            self.logger.info("Configuration loaded",
-                           bins=len(bins), trucks=len(trucks))
+            # SAFE MESSAGE SENDING: Only send messages if Redis client is available
+            if hasattr(self, 'redis_client') and self.redis_client is not None:
+                print("🔧 SUPERVISOR: Redis client available, publishing system state...")
+                try:
+                    await self._publish_system_state()
+                    print("✅ SUPERVISOR: System state published successfully")
+                except Exception as e:
+                    print(f"⚠️ SUPERVISOR: Failed to publish system state: {e}")
+                    # Continue anyway - the state is updated locally
+                
+                try:
+                    # Send success response
+                    response_data = {
+                        "status": "success",
+                        "bins": len(bins),
+                        "trucks": len(trucks),
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    await self.send_message("config_loaded", response_data)
+                    print("✅ SUPERVISOR: Response message sent")
+                except Exception as e:
+                    print(f"⚠️ SUPERVISOR: Failed to send response message: {e}")
+                    # Continue anyway - the config was loaded successfully
+            else:
+                print("⚠️ SUPERVISOR: Redis client not available, skipping message publishing")
+                print("   (This is normal during testing)")
+            
+            print(f"🎉 SUPERVISOR: Configuration loaded successfully!")
+            print(f"   Final verification: {len(self.system_state.bins)} bins, {len(self.system_state.trucks)} trucks in system state")
+            
+            return True  # Indicate success
             
         except Exception as e:
+            print(f"❌ SUPERVISOR: Configuration loading failed: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # SAFE ERROR MESSAGE SENDING
+            if hasattr(self, 'redis_client') and self.redis_client is not None:
+                try:
+                    await self.send_message(
+                        "config_loaded",
+                        {
+                            "status": "error",
+                            "error": str(e)
+                        }
+                    )
+                except Exception as msg_error:
+                    print(f"⚠️ SUPERVISOR: Could not send error message: {msg_error}")
+            
+            return False  # Indicate failure
+
+    async def _publish_system_state(self):
+        """Publish system state to all agents - REDIS-SAFE VERSION"""
+        if not self.system_state:
+            print("⚠️ SUPERVISOR: No system state to publish")
+            return
+
+        if not hasattr(self, 'redis_client') or self.redis_client is None:
+            print("⚠️ SUPERVISOR: Redis client not available, cannot publish system state")
+            return
+
+        try:
+            # Convert system state to dict for JSON serialization
+            state_dict = {
+                "timestamp": self.system_state.timestamp.isoformat(),
+                "bins": [self._bin_to_dict(bin_obj) for bin_obj in self.system_state.bins],
+                "trucks": [self._truck_to_dict(truck) for truck in self.system_state.trucks],
+                "active_routes": [self._route_to_dict(route) for route in self.system_state.active_routes],
+                "simulation_running": self.system_state.simulation_running,
+                "simulation_speed": getattr(self.system_state, 'simulation_speed', 1.0),
+                "current_time": self.system_state.current_time.isoformat() if self.system_state.current_time else None
+            }
+            
+            print(f"🔧 SUPERVISOR: Publishing state with {len(state_dict['bins'])} bins, {len(state_dict['trucks'])} trucks")
+            
+            # Broadcast to all agents
             await self.send_message(
-                "config_loaded",
-                {
-                    "status": "error",
-                    "error": str(e)
-                }
+                "system_state_update",
+                state_dict,
+                target_stream="cleanify:system:state"
             )
-            self.logger.error("Failed to load configuration", error=str(e))
+            
+            print("✅ SUPERVISOR: System state published successfully")
+            
+        except Exception as e:
+            print(f"❌ SUPERVISOR: Failed to publish system state: {e}")
+            raise
+
+    # Add this method to provide direct access to system state for API
+    def get_current_system_state(self):
+        """Get current system state directly (for API access)"""
+        return self.system_state
     
     async def _handle_start_simulation(self, data: Dict[str, Any]):
         """Handle simulation start"""
@@ -462,33 +565,45 @@ class SupervisorAgent(AgentBase):
         self.logger.info("Route planned", route_id=route_data.get("id"))
     
     def _bin_to_dict(self, bin_obj: Bin) -> Dict[str, Any]:
-        """Convert Bin object to dictionary"""
-        return {
-            "id": bin_obj.id,
-            "lat": bin_obj.lat,
-            "lon": bin_obj.lon,
-            "capacity_l": bin_obj.capacity_l,
-            "fill_level": bin_obj.fill_level,
-            "fill_rate_lph": bin_obj.fill_rate_lph,
-            "tile_id": bin_obj.tile_id,
-            "threshold": bin_obj.threshold,
-            "assigned_truck": bin_obj.assigned_truck,
-            "being_collected": bin_obj.being_collected
-        }
+        """Convert Bin object to dictionary - DEBUG VERSION"""
+        try:
+            result = {
+                "id": bin_obj.id,
+                "lat": bin_obj.lat,
+                "lon": bin_obj.lon,
+                "capacity_l": bin_obj.capacity_l,
+                "fill_level": bin_obj.fill_level,
+                "fill_rate_lph": bin_obj.fill_rate_lph,
+                "tile_id": bin_obj.tile_id,
+                "threshold": getattr(bin_obj, 'threshold', 85.0),
+                "assigned_truck": getattr(bin_obj, 'assigned_truck', None),
+                "being_collected": getattr(bin_obj, 'being_collected', False)
+            }
+            print(f"🔧 SUPERVISOR: _bin_to_dict result: {result}")
+            return result
+        except Exception as e:
+            print(f"❌ SUPERVISOR: _bin_to_dict failed: {e}")
+            raise
     
     def _truck_to_dict(self, truck: Truck) -> Dict[str, Any]:
-        """Convert Truck object to dictionary"""
-        return {
-            "id": truck.id,
-            "name": truck.name,
-            "capacity_l": truck.capacity_l,
-            "lat": truck.lat,
-            "lon": truck.lon,
-            "current_load_l": truck.current_load_l,
-            "status": truck.status.value,
-            "speed_kmh": truck.speed_kmh,
-            "route_id": truck.route_id
-        }
+        """Convert Truck object to dictionary - DEBUG VERSION"""
+        try:
+            result = {
+                "id": truck.id,
+                "name": truck.name,
+                "capacity_l": truck.capacity_l,
+                "lat": truck.lat,
+                "lon": truck.lon,
+                "current_load_l": getattr(truck, 'current_load_l', 0),
+                "status": getattr(truck, 'status', 'idle').value if hasattr(getattr(truck, 'status', 'idle'), 'value') else str(getattr(truck, 'status', 'idle')),
+                "speed_kmh": getattr(truck, 'speed_kmh', 30.0),
+                "route_id": getattr(truck, 'route_id', None)
+            }
+            print(f"🔧 SUPERVISOR: _truck_to_dict result: {result}")
+            return result
+        except Exception as e:
+            print(f"❌ SUPERVISOR: _truck_to_dict failed: {e}")
+            raise
     
     def _route_to_dict(self, route: Route) -> Dict[str, Any]:
         """Convert Route object to dictionary"""
