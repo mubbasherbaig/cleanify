@@ -24,10 +24,11 @@ settings = get_settings()
 
 
 class SystemStateResponse(BaseModel):
-    """System state response model"""
+    """System state response model - FIXED with current_time"""
     timestamp: str
     simulation_running: bool
     simulation_speed: float
+    current_time: str  # CRITICAL: Added missing current_time field
     bins: List[Dict[str, Any]]
     trucks: List[Dict[str, Any]]
     active_routes: List[Dict[str, Any]]
@@ -186,43 +187,46 @@ async def debug_reload_config():
             detail=f"Debug reload error: {str(e)}"
         )
 
-@app.get("/api/system-state", response_model=SystemStateResponse, tags=["System"])
-async def get_system_state():
-    """Get current system state"""
+# @app.get("/api/system-state", response_model=SystemStateResponse, tags=["System"])
+# async def get_system_state():
+#     """Get current system state - FIXED VERSION"""
     
-    if not supervisor or not supervisor.system_state:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="System not initialized"
-        )
+#     if not supervisor:
+#         raise HTTPException(
+#             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+#             detail="Supervisor not available"
+#         )
     
-    try:
-        state = supervisor.system_state
+#     # Get state directly from supervisor
+#     state_dict = supervisor.get_current_system_state()
+    
+#     if not state_dict:
+#         raise HTTPException(
+#             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+#             detail="System state not initialized"
+#         )
+    
+#     try:
+#         print(f"🔍 API: Returning system state with time: {state_dict.get('current_time')}")
         
-        return SystemStateResponse(
-            timestamp=state.timestamp.isoformat(),
-            simulation_running=state.simulation_running,
-            simulation_speed=state.simulation_speed,
-            bins=[supervisor._bin_to_dict(bin_obj) for bin_obj in state.bins],
-            trucks=[supervisor._truck_to_dict(truck) for truck in state.trucks],
-            active_routes=[supervisor._route_to_dict(route) for route in state.active_routes],
-            traffic_conditions=[
-                {
-                    "timestamp": tc.timestamp.isoformat(),
-                    "level": tc.level,
-                    "multiplier": tc.multiplier,
-                    "region": tc.region,
-                    "source": tc.source
-                }
-                for tc in state.traffic_conditions
-            ]
-        )
+#         # CRITICAL: Ensure current_time is included in response
+#         return SystemStateResponse(
+#             timestamp=state_dict["timestamp"],
+#             simulation_running=state_dict["simulation_running"],
+#             simulation_speed=state_dict["simulation_speed"],
+#             current_time=state_dict["current_time"],  # CRITICAL: Include current_time
+#             bins=state_dict["bins"],
+#             trucks=state_dict["trucks"], 
+#             active_routes=state_dict["active_routes"],
+#             traffic_conditions=[]  # Can be empty for now
+#         )
         
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error getting system state: {str(e)}"
-        )
+#     except Exception as e:
+#         print(f"❌ API: Error getting system state: {e}")
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail=f"Error getting system state: {str(e)}"
+#         )
 
 
 @app.post("/api/load-config", tags=["Configuration"])
@@ -283,6 +287,29 @@ async def load_config(config: ConfigurationRequest):
             detail=f"Configuration error: {str(e)}"
         )
 
+def get_current_system_state(self):
+    """Get current system state with guaranteed proper time - SUPERVISOR METHOD"""
+    if not self.system_state:
+        return None
+    
+    # CRITICAL: Ensure simulation time is always set
+    if self.simulation_current_time is None:
+        self.simulation_current_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+        print(f"⚠️ SUPERVISOR: Late-initialized simulation time to {self.simulation_current_time.strftime('%H:%M:%S')}")
+    
+    # CRITICAL: Always return proper time
+    state_dict = {
+        "timestamp": self.system_state.timestamp.isoformat(),
+        "bins": [self._bin_to_dict(bin_obj) for bin_obj in self.system_state.bins],
+        "trucks": [self._truck_to_dict(truck) for truck in self.system_state.trucks],
+        "active_routes": [self._route_to_dict(route) for route in self.system_state.active_routes],
+        "simulation_running": self.simulation_running,
+        "simulation_speed": self.simulation_speed,
+        "current_time": self.simulation_current_time.isoformat()  # GUARANTEED to be set
+    }
+    
+    print(f"📤 SUPERVISOR: Returning state with current_time: {state_dict['current_time']}")
+    return state_dict
 
 @app.get("/api/system-state", response_model=SystemStateResponse, tags=["System"])
 async def get_system_state():
@@ -294,35 +321,28 @@ async def get_system_state():
             detail="Supervisor not available"
         )
     
-    # Get state directly from supervisor instead of Redis
-    state = supervisor.get_current_system_state()
+    # Get state directly from supervisor
+    state_dict = supervisor.get_current_system_state()
     
-    if not state:
+    if not state_dict:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="System state not initialized"
         )
     
     try:
-        print(f"🔍 API: Returning system state with {len(state.bins)} bins, {len(state.trucks)} trucks")
+        print(f"🔍 API: Returning system state with time: {state_dict.get('current_time')}")
         
+        # CRITICAL: Ensure current_time is included in response
         return SystemStateResponse(
-            timestamp=state.timestamp.isoformat(),
-            simulation_running=state.simulation_running,
-            simulation_speed=getattr(state, 'simulation_speed', 1.0),
-            bins=[supervisor._bin_to_dict(bin_obj) for bin_obj in state.bins],
-            trucks=[supervisor._truck_to_dict(truck) for truck in state.trucks],
-            active_routes=[supervisor._route_to_dict(route) for route in state.active_routes],
-            traffic_conditions=[
-                {
-                    "timestamp": tc.timestamp.isoformat(),
-                    "level": tc.level,
-                    "multiplier": tc.multiplier,
-                    "region": tc.region,
-                    "source": tc.source
-                }
-                for tc in state.traffic_conditions
-            ]
+            timestamp=state_dict["timestamp"],
+            simulation_running=state_dict["simulation_running"],
+            simulation_speed=state_dict["simulation_speed"],
+            current_time=state_dict["current_time"],  # CRITICAL: Include current_time
+            bins=state_dict["bins"],
+            trucks=state_dict["trucks"], 
+            active_routes=state_dict["active_routes"],
+            traffic_conditions=[]  # Can be empty for now
         )
         
     except Exception as e:

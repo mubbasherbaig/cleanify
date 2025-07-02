@@ -223,94 +223,11 @@ class RoutePlannerAgent(AgentBase):
         else:
             return await self._optimize_with_greedy(available_trucks, urgent_bins)
     
-    async def _optimize_with_ortools(self, trucks: List[Truck], bins: List[Bin]) -> List[Route]:
-        """Optimize routes using OR-Tools Vehicle Routing Problem solver"""
-        
-        if not trucks or not bins:
-            return []
-        
-        try:
-            # Prepare data for OR-Tools
-            data = await self._prepare_ortools_data(trucks, bins)
-            
-            # Create routing model
-            manager = pywrapcp.RoutingIndexManager(
-                data['num_locations'],
-                data['num_vehicles'],
-                data['depot']
-            )
-            routing = pywrapcp.RoutingModel(manager)
-            
-            # Define cost callback
-            def distance_callback(from_index, to_index):
-                from_node = manager.IndexToNode(from_index)
-                to_node = manager.IndexToNode(to_index)
-                return data['distance_matrix'][from_node][to_node]
-            
-            transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-            routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-            
-            # Add capacity constraints
-            def demand_callback(from_index):
-                from_node = manager.IndexToNode(from_index)
-                return data['demands'][from_node]
-            
-            demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
-            routing.AddDimensionWithVehicleCapacity(
-                demand_callback_index,
-                0,  # null capacity slack
-                data['vehicle_capacities'],  # vehicle maximum capacities
-                True,  # start cumul to zero
-                'Capacity'
-            )
-            
-            # Add time windows constraint
-            if data.get('time_windows'):
-                def time_callback(from_index, to_index):
-                    from_node = manager.IndexToNode(from_index)
-                    to_node = manager.IndexToNode(to_index)
-                    return data['time_matrix'][from_node][to_node] + data['service_times'][from_node]
-                
-                time_callback_index = routing.RegisterTransitCallback(time_callback)
-                routing.AddDimension(
-                    time_callback_index,
-                    30,  # allow waiting time
-                    data['max_time'],  # maximum time per vehicle
-                    False,  # don't force start cumul to zero
-                    'Time'
-                )
-                
-                time_dimension = routing.GetDimensionOrDie('Time')
-                for location_idx, time_window in enumerate(data['time_windows']):
-                    if location_idx == data['depot']:
-                        continue
-                    index = manager.NodeToIndex(location_idx)
-                    time_dimension.CumulVar(index).SetRange(time_window[0], time_window[1])
-            
-            # Set search parameters
-            search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-            search_parameters.first_solution_strategy = (
-                routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-            )
-            search_parameters.local_search_metaheuristic = (
-                routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-            )
-            search_parameters.time_limit.FromSeconds(self.settings.optimization.OPTIMIZATION_TIMEOUT_SEC)
-            
-            # Solve
-            solution = routing.SolveWithParameters(search_parameters)
-            
-            if solution:
-                return await self._extract_ortools_solution(
-                    manager, routing, solution, data, trucks, bins
-                )
-            else:
-                self.logger.warning("OR-Tools failed to find solution")
-                return await self._optimize_with_greedy(trucks, bins)
-                
-        except Exception as e:
-            self.logger.error("OR-Tools optimization failed", error=str(e))
-            return await self._optimize_with_greedy(trucks, bins)
+    # In route_planner.py, make optimization async
+    async def _optimize_with_ortools(self, trucks, bins):
+        # Run in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._run_ortools_sync, trucks, bins)
     
     async def _prepare_ortools_data(self, trucks: List[Truck], bins: List[Bin]) -> Dict[str, Any]:
         """Prepare data structure for OR-Tools"""

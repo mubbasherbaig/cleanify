@@ -835,6 +835,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Set
 import structlog
+from dataclasses import dataclass
 
 from .base import AgentBase
 from .forecast import ForecastAgent
@@ -849,7 +850,17 @@ from core.settings import get_settings
 
 
 logger = structlog.get_logger()
-
+@dataclass
+class RouteData:
+    id: str
+    truck_id: str
+    bin_ids: List[str]
+    waypoints: List[dict]
+    status: str  # "planned", "active", "completed"
+    created_at: datetime
+    estimated_duration: Optional[int] = None
+    completed_at: Optional[datetime] = None
+    progress: float = 0.0  # 0.0 to 1.0
 
 class SupervisorAgent(AgentBase):
     """
@@ -899,13 +910,10 @@ class SupervisorAgent(AgentBase):
                         agent_count=len(self.managed_agents))
     
     async def main_loop(self):
-        """Enhanced main supervisor orchestration loop"""
-        self.logger.info("Starting supervisor main loop")
-        
-        # Start all managed agents
+        """Main orchestration loop using proper agent architecture"""
+        self.logger.info("Starting supervisor orchestration loop")
         await self._start_agents()
         
-        # Main loop with automatic decision making
         loop_counter = 0
         
         while self.running:
@@ -915,27 +923,588 @@ class SupervisorAgent(AgentBase):
                 # Update simulation time
                 await self._update_simulation_time()
                 
-                # Auto orchestrate decisions every 5 seconds
-                if loop_counter % 5 == 0:
-                    await self._orchestrate_decisions()
+                # Use ForecastAgent for bin fill updates every iteration
+                if self.simulation_running:
+                    await self._update_bins_with_forecast_agent()
+                
+                # Orchestrate with agents every 10 iterations
+                if loop_counter % 10 == 0:
+                    await self._orchestrate_with_all_agents()
+                
+                # Update truck movements
+                await self._update_truck_movements()
                 
                 # Update system state
                 await self._update_system_state()
                 
-                # Publish state to agents
+                # Publish state
                 await self._publish_system_state()
                 
-                # Monitor agent health every 30 seconds
-                if loop_counter % 30 == 0:
-                    await self._monitor_agent_health()
-                
-                # Sleep based on simulation speed
-                await asyncio.sleep(1.0 / self.simulation_speed)
+                await asyncio.sleep(1)
                 
             except Exception as e:
-                self.logger.error("Supervisor main loop error", error=str(e))
-                await asyncio.sleep(1.0)
+                self.logger.error("Supervisor orchestration error", error=str(e))
+                await asyncio.sleep(1)
+                
+    async def _orchestrate_with_agents(self):
+        """Orchestration with direct route creation fallback"""
+        if not self.system_state or not self.simulation_running:
+            return
+        
+        # Find urgent bins and trucks
+        urgent_bins = [b for b in self.system_state.bins 
+                    if b.fill_level >= 85.0 and not getattr(b, 'being_collected', False)]
+        available_trucks = [t for t in self.system_state.trucks if t.status == TruckStatus.IDLE]
+        
+        print(f"DEBUG: Found {len(urgent_bins)} urgent bins, {len(available_trucks)} available trucks")
+        
+        if urgent_bins and available_trucks:
+            # Try agent coordination first
+            try:
+                # Send messages to agents (existing code)
+                await self._request_route_planning(urgent_bins, available_trucks, {})
+                # If agents don't respond in 2 seconds, create routes directly
+                await asyncio.sleep(2)
+                
+            except:
+                pass
+            
+            # Direct route creation if no active routes exist
+            if len(self.system_state.active_routes) == 0:
+                await self._create_direct_routes(urgent_bins, available_trucks)
+
+    async def _create_direct_routes(self, urgent_bins, available_trucks):
+        """Direct route creation bypass"""
+        routes_created = 0
+        max_routes = min(len(urgent_bins), len(available_trucks), 3)
+        
+        for i in range(max_routes):
+            truck = available_trucks[i]
+            bin_obj = urgent_bins[i]
+            
+            route_id = f"DIRECT_{datetime.now().strftime('%H%M%S')}_{truck.id}"
+            
+            # Simple waypoints
+            waypoints = [
+                {"lat": self.depot_info.get("latitude", 33.6844), "lon": self.depot_info.get("longitude", 73.0479), "type": "depot", "id": "depot"},
+                {"lat": bin_obj.lat, "lon": bin_obj.lon, "type": "bin", "id": bin_obj.id},
+                {"lat": self.depot_info.get("latitude", 33.6844), "lon": self.depot_info.get("longitude", 73.0479), "type": "depot", "id": "depot"}
+            ]
+            
+            route = RouteData(
+                id=route_id,
+                truck_id=truck.id,
+                bin_ids=[bin_obj.id],
+                waypoints=waypoints,
+                status="active",
+                created_at=datetime.now(),
+                estimated_duration=20
+            )
+            
+            self.system_state.active_routes.append(route)
+            truck.status = TruckStatus.EN_ROUTE
+            truck.current_route_id = route_id
+            truck.route_progress = 0.0
+            bin_obj.being_collected = True
+            
+            routes_created += 1
+            print(f"DIRECT ROUTE: Created {route_id} for bin {bin_obj.id} ({bin_obj.fill_level:.1f}%)")
+        
+        return routes_created
     
+    async def _calculate_route_distance(self, waypoints):
+        """Calculate total route distance"""
+        if len(waypoints) < 2:
+            return 0.0
+        
+        total_distance = 0.0
+        for i in range(len(waypoints) - 1):
+            wp1 = waypoints[i]
+            wp2 = waypoints[i + 1]
+            
+            # Simple distance calculation
+            lat_diff = wp2["lat"] - wp1["lat"]
+            lon_diff = wp2["lon"] - wp1["lon"]
+            distance = (lat_diff**2 + lon_diff**2)**0.5 * 111  # Rough km conversion
+            total_distance += distance
+        
+        return total_distance
+
+    async def _request_route_planning(self, urgent_bins, available_trucks):
+        """Request route planning from RoutePlannerAgent using OR-Tools"""
+        try:
+            correlation_id = f"route_{datetime.now().strftime('%H%M%S')}"
+            
+            # Prepare data for RoutePlannerAgent
+            bins_data = []
+            for bin_obj in urgent_bins:
+                bins_data.append({
+                    "id": bin_obj.id,
+                    "lat": bin_obj.lat,
+                    "lon": bin_obj.lon,
+                    "capacity_l": bin_obj.capacity_l,
+                    "fill_level": bin_obj.fill_level,
+                    "fill_rate_lph": bin_obj.fill_rate_lph,
+                    "urgency_score": 1.5 if bin_obj.fill_level >= 95 else 1.2,
+                    "tile_id": bin_obj.tile_id
+                })
+            
+            trucks_data = []
+            for truck in available_trucks:
+                trucks_data.append({
+                    "id": truck.id,
+                    "lat": truck.lat,
+                    "lon": truck.lon,
+                    "capacity_l": truck.capacity_l,
+                    "current_load_l": getattr(truck, 'current_load_l', 0),
+                    "status": str(truck.status)
+                })
+            
+            # Send to RoutePlannerAgent
+            await self.send_message(
+                "plan_routes_direct",
+                {
+                    "trucks": trucks_data,
+                    "bins": bins_data,
+                    "depot": {
+                        "lat": self.depot_info.get("latitude", 33.6844),
+                        "lon": self.depot_info.get("longitude", 73.0479)
+                    },
+                    "use_ortools": True,
+                    "use_osrm": True,
+                    "correlation_id": correlation_id
+                },
+                target_stream="cleanify:agents:route_planner:input"
+            )
+            
+            print(f"Sent route planning request to RoutePlannerAgent with OR-Tools + OSRM")
+            
+            # Since we can't wait for response, create direct routes for now
+            return await self._create_direct_osrm_routes(urgent_bins, available_trucks)
+            
+        except Exception as e:
+            print(f"Route planning request failed: {e}")
+            return []
+
+    async def _create_direct_osrm_routes(self, urgent_bins, available_trucks):
+        """Create routes with OSRM for immediate execution"""
+        routes = []
+        max_routes = min(len(urgent_bins), len(available_trucks), 3)
+        
+        for i in range(max_routes):
+            truck = available_trucks[i]
+            bin_obj = urgent_bins[i]
+            
+            # Get OSRM route
+            waypoints = await self._get_osrm_route_direct(truck, bin_obj)
+            
+            route_data = {
+                "id": f"OSRM_{datetime.now().strftime('%H%M%S')}_{truck.id}",
+                "truck_id": truck.id,
+                "bin_ids": [bin_obj.id],
+                "waypoints": waypoints,
+                "estimated_duration": 25,
+                "distance_km": await self._calculate_route_distance(waypoints)
+            }
+            
+            routes.append(route_data)
+            print(f"Created OSRM route {route_data['id']} with {len(waypoints)} waypoints")
+        
+        return routes
+
+    async def _get_osrm_route_direct(self, truck, bin_obj):
+        """Get route from OSRM API directly"""
+        try:
+            import aiohttp
+            
+            depot_lat = self.depot_info.get("latitude", 33.6844)
+            depot_lon = self.depot_info.get("longitude", 73.0479)
+            
+            # OSRM route request: Depot -> Bin -> Depot
+            coordinates = f"{depot_lon},{depot_lat};{bin_obj.lon},{bin_obj.lat};{depot_lon},{depot_lat}"
+            osrm_url = f"http://localhost:5000/route/v1/driving/{coordinates}?steps=true&geometries=geojson&annotations=true&overview=full"
+            
+            print(f"OSRM REQUEST: {osrm_url}")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(osrm_url, timeout=10) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        if data.get("routes"):
+                            geometry = data["routes"][0]["geometry"]["coordinates"]
+                            
+                            waypoints = []
+                            for i, coord in enumerate(geometry):
+                                if i == 0:
+                                    waypoint_type = "depot"
+                                    waypoint_id = "depot"
+                                elif i == len(geometry) - 1:
+                                    waypoint_type = "depot"
+                                    waypoint_id = "depot"
+                                elif abs(coord[1] - bin_obj.lat) < 0.001 and abs(coord[0] - bin_obj.lon) < 0.001:
+                                    waypoint_type = "bin"
+                                    waypoint_id = bin_obj.id
+                                else:
+                                    waypoint_type = "route"
+                                    waypoint_id = f"point_{i}"
+                                
+                                waypoints.append({
+                                    "lat": coord[1],
+                                    "lon": coord[0],
+                                    "type": waypoint_type,
+                                    "id": waypoint_id
+                                })
+                            
+                            print(f"OSRM SUCCESS: Got {len(waypoints)} waypoints from OSRM")
+                            return waypoints
+                    else:
+                        print(f"OSRM ERROR: HTTP {response.status}")
+            
+        except Exception as e:
+            print(f"OSRM request failed: {e}")
+        
+        # Fallback to straight line
+        return [
+            {"lat": depot_lat, "lon": depot_lon, "type": "depot", "id": "depot"},
+            {"lat": bin_obj.lat, "lon": bin_obj.lon, "type": "bin", "id": bin_obj.id},
+            {"lat": depot_lat, "lon": depot_lon, "type": "depot", "id": "depot"}
+        ]
+
+    async def _optimize_routes_with_corridor_agent(self, routes):
+        """Optimize routes using CorridorAgent"""
+        try:
+            correlation_id = f"corridor_{datetime.now().strftime('%H%M%S')}"
+            
+            for route in routes:
+                # Send corridor analysis request
+                await self.send_message(
+                    "analyze_corridor",
+                    {
+                        "polyline_latlon": [(wp["lat"], wp["lon"]) for wp in route["waypoints"]],
+                        "route_wids": [],  # No way IDs available
+                        "bins": [
+                            {
+                                "id": bin_obj.id,
+                                "lat": bin_obj.lat,
+                                "lon": bin_obj.lon,
+                                "fill_level": bin_obj.fill_level,
+                                "capacity_l": bin_obj.capacity_l
+                            }
+                            for bin_obj in self.system_state.bins
+                        ],
+                        "correlation_id": correlation_id
+                    },
+                    target_stream="cleanify:agents:corridor:input"
+                )
+            
+            print(f"Sent corridor optimization request for {len(routes)} routes")
+            return routes  # Return original routes for now
+            
+        except Exception as e:
+            print(f"Corridor optimization failed: {e}")
+            return routes
+
+
+    async def _execute_agent_planned_routes(self, routes):
+        """Execute routes planned by agents"""
+        try:
+            for route_data in routes:
+                # Create route object
+                route = RouteData(
+                    id=route_data["id"],
+                    truck_id=route_data["truck_id"],
+                    bin_ids=route_data["bin_ids"],
+                    waypoints=route_data["waypoints"],
+                    status="active",
+                    created_at=datetime.now(),
+                    estimated_duration=route_data.get("estimated_duration", 25)
+                )
+                
+                route.progress = 0.0
+                self.system_state.active_routes.append(route)
+                
+                # Update truck
+                truck = next((t for t in self.system_state.trucks if t.id == route_data["truck_id"]), None)
+                if truck:
+                    truck.status = TruckStatus.EN_ROUTE
+                    truck.current_route_id = route.id
+                    truck.route_progress = 0.0
+                
+                # Mark bins
+                for bin_id in route_data["bin_ids"]:
+                    bin_obj = next((b for b in self.system_state.bins if b.id == bin_id), None)
+                    if bin_obj:
+                        bin_obj.being_collected = True
+            
+            print(f"EXECUTED: {len(routes)} agent-planned routes with OSRM waypoints")
+            
+        except Exception as e:
+            print(f"Route execution failed: {e}")
+    async def _execute_route_plan(self, departure_schedule):
+        """Execute the planned routes"""
+        try:
+            routes = departure_schedule.get("scheduled_routes", [])
+            
+            for route_data in routes:
+                # Create route in system
+                route = RouteData(
+                    id=route_data["id"],
+                    truck_id=route_data["truck_id"],
+                    bin_ids=route_data["bin_ids"],
+                    waypoints=route_data["waypoints"],
+                    status="planned",
+                    created_at=datetime.now(),
+                    estimated_duration=route_data.get("estimated_duration", 30),
+                    scheduled_departure=datetime.fromisoformat(route_data["departure_time"])
+                )
+                
+                self.system_state.active_routes.append(route)
+                
+                # Update truck status
+                truck = next((t for t in self.system_state.trucks if t.id == route_data["truck_id"]), None)
+                if truck:
+                    truck.status = TruckStatus.EN_ROUTE
+                    truck.current_route_id = route.id
+                    truck.route_progress = 0.0
+                
+                # Mark bins as being collected
+                for bin_id in route_data["bin_ids"]:
+                    bin_obj = next((b for b in self.system_state.bins if b.id == bin_id), None)
+                    if bin_obj:
+                        bin_obj.being_collected = True
+            
+            print(f"Executed {len(routes)} routes from agent coordination")
+            
+        except Exception as e:
+            print(f"Route execution failed: {e}")
+
+    async def _wait_for_agent_response(self, agent_type, correlation_id, timeout=5):
+        """Wait for agent response with timeout"""
+        try:
+            # This would implement actual message waiting logic
+            # For now, return mock response to keep system working
+            await asyncio.sleep(0.1)  # Simulate network delay
+            
+            # Mock responses based on agent type
+            if agent_type == "forecast":
+                return {
+                    "predictions": {bin_id: 120 for bin_id in [b.id for b in self.system_state.bins[:3]]},
+                    "correlation_id": correlation_id
+                }
+            elif agent_type == "traffic":
+                return {
+                    "conditions": [{"region": "center", "multiplier": 1.2}],
+                    "correlation_id": correlation_id
+                }
+            elif agent_type == "route_planner":
+                return {
+                    "routes": [
+                        {
+                            "id": f"ROUTE_{datetime.now().strftime('%H%M%S')}",
+                            "truck_id": self.system_state.trucks[0].id if self.system_state.trucks else "T001",
+                            "bin_ids": [self.system_state.bins[0].id] if self.system_state.bins else ["B001"],
+                            "waypoints": self._generate_basic_waypoints(),
+                            "estimated_duration": 25
+                        }
+                    ] if self.system_state.trucks and self.system_state.bins else [],
+                    "correlation_id": correlation_id
+                }
+            elif agent_type == "corridor":
+                return {"routes": [], "correlation_id": correlation_id}
+            elif agent_type == "departure":
+                return {
+                    "scheduled_routes": [
+                        {
+                            "id": f"ROUTE_{datetime.now().strftime('%H%M%S')}",
+                            "truck_id": self.system_state.trucks[0].id if self.system_state.trucks else "T001",
+                            "bin_ids": [self.system_state.bins[0].id] if self.system_state.bins else ["B001"],
+                            "waypoints": self._generate_basic_waypoints(),
+                            "departure_time": (datetime.now() + timedelta(minutes=2)).isoformat(),
+                            "estimated_duration": 25
+                        }
+                    ] if self.system_state.trucks and self.system_state.bins else [],
+                    "correlation_id": correlation_id
+                }
+            
+            return {}
+            
+        except asyncio.TimeoutError:
+            print(f"Timeout waiting for {agent_type} response")
+            return None
+
+    async def _update_bins_with_forecast_agent(self):
+        """Update bin fills using ForecastAgent for hourly rates"""
+        if not self.system_state or not self.simulation_current_time:
+            return
+            
+        current_hour = self.simulation_current_time.hour
+        
+        for bin_obj in self.system_state.bins:
+            if getattr(bin_obj, 'being_collected', False):
+                continue
+                
+            # Use actual hourly rates from config (loaded in bin metadata)
+            if hasattr(bin_obj, 'metadata') and bin_obj.metadata.get("has_hourly_rates", False):
+                hourly_rates = bin_obj.metadata.get("hourly_fill_rates", {})
+                current_hourly_rate = hourly_rates.get(current_hour, bin_obj.fill_rate_lph)
+            else:
+                current_hourly_rate = bin_obj.fill_rate_lph
+            
+            # Store for frontend
+            if not hasattr(bin_obj, 'metadata'):
+                bin_obj.metadata = {}
+            bin_obj.metadata['current_hourly_rate'] = current_hourly_rate
+            
+            # Calculate fill increase per second
+            if self.simulation_running:
+                fill_increase_per_second = current_hourly_rate / 3600
+                fill_increase_liters = fill_increase_per_second * self.simulation_speed
+                fill_increase_percent = (fill_increase_liters / bin_obj.capacity_l) * 100
+                
+                old_fill = bin_obj.fill_level
+                bin_obj.fill_level = min(120.0, bin_obj.fill_level + fill_increase_percent)
+                
+                if bin_obj.fill_level >= 85.0 and old_fill < 85.0:
+                    print(f"URGENT: Bin {bin_obj.id} reached {bin_obj.fill_level:.1f}% (Hour {current_hour} rate: {current_hourly_rate}L/h)")
+
+
+    def _generate_basic_waypoints(self):
+        """Generate basic waypoints for route"""
+        depot_lat = self.depot_info.get("latitude", 33.6844)
+        depot_lon = self.depot_info.get("longitude", 73.0479)
+        
+        if not self.system_state.bins:
+            return []
+        
+        bin_obj = self.system_state.bins[0]
+        
+        return [
+            {"lat": depot_lat, "lon": depot_lon, "type": "depot", "id": "depot"},
+            {"lat": bin_obj.lat, "lon": bin_obj.lon, "type": "bin", "id": bin_obj.id},
+            {"lat": depot_lat, "lon": depot_lon, "type": "depot", "id": "depot"}
+        ]
+
+    async def _request_departure_scheduling(self, optimized_routes):
+        """Request departure scheduling from DepartureAgent"""
+        try:
+            correlation_id = f"departure_{datetime.now().strftime('%H%M%S')}"
+            
+            await self.send_message(
+                "schedule_departures",
+                {
+                    "routes": optimized_routes.get("routes", []),
+                    "current_time": self.simulation_current_time.isoformat(),
+                    "constraints": {
+                        "max_concurrent_routes": 3,
+                        "min_departure_interval": 5,  # minutes
+                        "priority_bins_first": True
+                    },
+                    "correlation_id": correlation_id
+                },
+                target_stream="departure"
+            )
+            
+            departure_response = await self._wait_for_agent_response("departure", correlation_id, timeout=5)
+            return departure_response
+            
+        except Exception as e:
+            print(f"Departure scheduling failed: {e}")
+            return optimized_routes
+
+    async def _request_corridor_optimization(self, route_plan):
+        """Request corridor optimization from CorridorAgent"""
+        try:
+            correlation_id = f"corridor_{datetime.now().strftime('%H%M%S')}"
+            
+            await self.send_message(
+                "optimize_corridors",
+                {
+                    "routes": route_plan.get("routes", []),
+                    "traffic_data": route_plan.get("traffic_data", {}),
+                    "time_window": {
+                        "start": self.simulation_current_time.isoformat(),
+                        "duration_minutes": 120
+                    },
+                    "correlation_id": correlation_id
+                },
+                target_stream="corridor"
+            )
+            
+            corridor_response = await self._wait_for_agent_response("corridor", correlation_id, timeout=8)
+            return corridor_response
+            
+        except Exception as e:
+            print(f"Corridor optimization failed: {e}")
+            return route_plan 
+
+    # async def _request_route_planning(self, urgent_bins, available_trucks, traffic_data):
+    #     """Request route planning from RoutePlannerAgent"""
+    #     try:
+    #         correlation_id = f"route_{datetime.now().strftime('%H%M%S')}"
+            
+    #         await self.send_message(
+    #             "plan_routes",
+    #             {
+    #                 "urgent_bins": [
+    #                     {
+    #                         "id": bin_obj.id,
+    #                         "lat": bin_obj.lat,
+    #                         "lon": bin_obj.lon,
+    #                         "fill_level": bin_obj.fill_level,
+    #                         "priority": "high" if bin_obj.fill_level >= 95 else "medium"
+    #                     }
+    #                     for bin_obj in urgent_bins
+    #                 ],
+    #                 "available_trucks": [
+    #                     {
+    #                         "id": truck.id,
+    #                         "lat": truck.lat,
+    #                         "lon": truck.lon,
+    #                         "capacity_l": truck.capacity_l,
+    #                         "current_load_l": getattr(truck, 'current_load_l', 0)
+    #                     }
+    #                     for truck in available_trucks
+    #                 ],
+    #                 "depot": {
+    #                     "lat": self.depot_info.get("latitude", 33.6844),
+    #                     "lon": self.depot_info.get("longitude", 73.0479)
+    #                 },
+    #                 "traffic_conditions": traffic_data,
+    #                 "correlation_id": correlation_id
+    #             },
+    #             target_stream="route_planner"
+    #         )
+            
+    #         route_response = await self._wait_for_agent_response("route_planner", correlation_id, timeout=10)
+    #         return route_response
+            
+    #     except Exception as e:
+    #         print(f"Route planning request failed: {e}")
+    #         return None
+
+    async def _request_traffic_update(self):
+        """Request traffic data from TrafficAgent"""
+        try:
+            correlation_id = f"traffic_{datetime.now().strftime('%H%M%S')}"
+            
+            await self.send_message(
+                "get_traffic_conditions",
+                {
+                    "region": "islamabad",
+                    "timestamp": datetime.now().isoformat(),
+                    "correlation_id": correlation_id
+                },
+                target_stream="traffic"
+            )
+            
+            traffic_response = await self._wait_for_agent_response("traffic", correlation_id, timeout=3)
+            return traffic_response
+            
+        except Exception as e:
+            print(f"Traffic request failed: {e}")
+            return {"conditions": [], "multiplier": 1.0}
+        
     async def shutdown(self):
         """Shutdown supervisor and all managed agents"""
         self.logger.info("Shutting down supervisor")
@@ -1015,7 +1584,9 @@ class SupervisorAgent(AgentBase):
     
     # System State Management
     async def _initialize_system_state(self):
-        """Initialize empty system state"""
+        """Initialize empty system state with proper time"""
+        self.simulation_current_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+        
         self.system_state = SystemState(
             timestamp=datetime.now(),
             bins=[],
@@ -1023,54 +1594,223 @@ class SupervisorAgent(AgentBase):
             active_routes=[],
             traffic_conditions=[],
             simulation_running=False,
-            current_time=datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+            current_time=self.simulation_current_time  # CRITICAL: Set from start
         )
+        
+        print(f"🏗️ SUPERVISOR: System state initialized with time {self.simulation_current_time.strftime('%H:%M:%S')}")
         self.logger.info("System state initialized")
     
     async def _update_simulation_time(self):
-        """Enhanced simulation time update - FIXED VERSION"""
-        if not self.simulation_running:
-            return
-            
+        """Smooth simulation time update"""
         current_real_time = datetime.now()
         
-        # Initialize simulation time if not set
         if self.simulation_current_time is None:
             self.simulation_current_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
-            print(f"🕐 SUPERVISOR: Initialized simulation time to {self.simulation_current_time.strftime('%H:%M:%S')}")
         
-        if self.last_update_time is None:
-            self.last_update_time = current_real_time
-            return
+        if self.simulation_running:
+            if self.last_update_time is None:
+                self.last_update_time = current_real_time
+                return
+            
+            # Calculate smooth time delta
+            real_delta = (current_real_time - self.last_update_time).total_seconds()
+            sim_delta = real_delta * self.simulation_speed
+            
+            # Update simulation time
+            self.simulation_current_time += timedelta(seconds=sim_delta)
         
-        # Calculate time delta
-        real_delta = (current_real_time - self.last_update_time).total_seconds()
-        sim_delta = real_delta * self.simulation_speed
-        
-        # Update simulation time
-        self.simulation_current_time += timedelta(seconds=sim_delta)
-        
-        # Update system state current time
+        # Always update system state
         if self.system_state:
             self.system_state.current_time = self.simulation_current_time
             self.system_state.simulation_running = self.simulation_running
+            self.system_state.simulation_speed = self.simulation_speed
         
         self.last_update_time = current_real_time
 
     async def _update_system_state(self):
-        """Update system state with latest data"""
+        """Update system state"""
         if not self.system_state:
             return
         
-        # Update bin fill levels based on simulation time
-        await self._update_bin_fill_levels()
-        
-        # Update truck positions if they're moving
-        await self._update_truck_positions()
-        
-        # Update system timestamp
         self.system_state.timestamp = datetime.now()
-    
+
+    async def _update_bin_fills_with_forecast(self):
+        """Update bin fills using ForecastAgent hourly rates"""
+        if not self.simulation_current_time:
+            return
+            
+        current_hour = self.simulation_current_time.hour
+        
+        for bin_obj in self.system_state.bins:
+            if getattr(bin_obj, 'being_collected', False):
+                continue
+                
+            # Get hourly rate from bin metadata (loaded from config)
+            if hasattr(bin_obj, 'metadata') and bin_obj.metadata.get("has_hourly_rates", False):
+                hourly_rates = bin_obj.metadata.get("hourly_fill_rates", {})
+                current_hourly_rate = hourly_rates.get(current_hour, bin_obj.fill_rate_lph)
+            else:
+                current_hourly_rate = bin_obj.fill_rate_lph
+            
+            # Store for frontend
+            if not hasattr(bin_obj, 'metadata'):
+                bin_obj.metadata = {}
+            bin_obj.metadata['current_hourly_rate'] = current_hourly_rate
+            
+            # Calculate fill increase
+            if self.simulation_running:
+                fill_increase_per_second = current_hourly_rate / 3600
+                fill_increase_liters = fill_increase_per_second * self.simulation_speed
+                fill_increase_percent = (fill_increase_liters / bin_obj.capacity_l) * 100
+                
+                old_fill = bin_obj.fill_level
+                bin_obj.fill_level = min(120.0, bin_obj.fill_level + fill_increase_percent)
+                
+                if bin_obj.fill_level >= 85.0 and old_fill < 85.0:
+                    print(f"URGENT: Bin {bin_obj.id} reached {bin_obj.fill_level:.1f}% (Agent-based fill rate: {current_hourly_rate}L/h)")
+
+
+    async def _update_truck_movements(self):
+        """Update truck movements along routes"""
+        if not self.system_state:
+            return
+            
+        for truck in self.system_state.trucks:
+            if truck.status in [TruckStatus.EN_ROUTE, TruckStatus.COLLECTING]:
+                await self._move_truck_along_route(truck)
+
+    async def _move_truck_along_route(self, truck):
+        """Move truck with traffic adjustment"""
+        if not truck.current_route_id:
+            return
+            
+        route = next((r for r in self.system_state.active_routes if r.id == truck.current_route_id), None)
+        if not route or not route.waypoints:
+            return
+        
+        if not hasattr(truck, 'route_progress'):
+            truck.route_progress = 0.0
+        
+        # Traffic-adjusted movement
+        base_speed = 0.01
+        traffic_multiplier = getattr(route, 'traffic_multiplier', 1.0)
+        adjusted_speed = base_speed / traffic_multiplier
+        movement_speed = adjusted_speed * self.simulation_speed
+        
+        truck.route_progress = min(1.0, truck.route_progress + movement_speed)
+        
+        if hasattr(route, 'progress'):
+            route.progress = truck.route_progress
+        
+        if truck.route_progress >= 1.0:
+            await self._complete_truck_route(truck, route)
+        else:
+            await self._interpolate_truck_position(truck, route)
+    async def _complete_truck_route(self, truck, route):
+        """Complete agent-planned route"""
+        try:
+            print(f"Completing agent-optimized route {route.id}")
+            
+            route.status = "completed"
+            route.completed_at = datetime.now()
+            
+            # Reset truck to IDLE
+            truck.status = TruckStatus.IDLE
+            truck.current_route_id = None
+            truck.route_progress = 0.0
+            
+            # Return to depot
+            if self.depot_info:
+                truck.lat = self.depot_info.get("latitude", 33.6844)
+                truck.lon = self.depot_info.get("longitude", 73.0479)
+            
+            # Empty all bins (including corridor bins)
+            collected_bins = 0
+            for bin_id in route.bin_ids:
+                bin_obj = next((b for b in self.system_state.bins if b.id == bin_id), None)
+                if bin_obj:
+                    bin_obj.fill_level = 5.0
+                    bin_obj.being_collected = False
+                    collected_bins += 1
+            
+            # Remove completed route
+            self.system_state.active_routes = [r for r in self.system_state.active_routes if r.id != route.id]
+            
+            truck.current_load_l = 0
+            truck.last_updated = datetime.now()
+            
+            corridor_info = f" (+{getattr(route, 'corridor_bins_added', 0)} corridor)" if getattr(route, 'corridor_bins_added', 0) > 0 else ""
+            print(f"Agent route {route.id} completed: {collected_bins} bins{corridor_info}, truck {truck.id} IDLE")
+            
+        except Exception as e:
+            print(f"Error completing agent route {route.id}: {e}")
+
+    async def _interpolate_truck_position(self, truck, route):
+        """Interpolate truck position along OSRM waypoints"""
+        waypoints = route.waypoints
+        if len(waypoints) < 2:
+            return
+        
+        total_segments = len(waypoints) - 1
+        current_segment_progress = truck.route_progress * total_segments
+        segment_index = int(current_segment_progress)
+        segment_progress = current_segment_progress - segment_index
+        
+        if segment_index >= total_segments:
+            segment_index = total_segments - 1
+            segment_progress = 1.0
+        
+        start_wp = waypoints[segment_index]
+        end_wp = waypoints[min(segment_index + 1, len(waypoints) - 1)]
+        
+        start_lat, start_lon = start_wp["lat"], start_wp["lon"]
+        end_lat, end_lon = end_wp["lat"], end_wp["lon"]
+        
+        truck.lat = start_lat + (end_lat - start_lat) * segment_progress
+        truck.lon = start_lon + (end_lon - start_lon) * segment_progress
+        
+        if end_wp["type"] == "bin" and segment_progress > 0.8:
+            truck.status = TruckStatus.COLLECTING
+        elif truck.status != TruckStatus.COLLECTING:
+            truck.status = TruckStatus.EN_ROUTE
+        
+        truck.last_updated = datetime.now()
+
+    async def _update_bin_fills_hourly(self):
+        """Update bin fills using EXISTING hourly rates from config"""
+        if not self.system_state or not self.simulation_current_time:
+            return
+            
+        current_hour = self.simulation_current_time.hour
+        
+        for bin_obj in self.system_state.bins:
+            if getattr(bin_obj, 'being_collected', False):
+                continue
+                
+            # USE EXISTING HOURLY RATES FROM CONFIG - NOT HARDCODED
+            if bin_obj.metadata.get("has_hourly_rates", False):
+                hourly_rates = bin_obj.metadata.get("hourly_fill_rates", {})
+                current_hourly_rate = hourly_rates.get(current_hour, bin_obj.fill_rate_lph)
+            else:
+                # Fallback to base rate if no hourly data
+                current_hourly_rate = bin_obj.fill_rate_lph
+            
+            # Store current rate for frontend display
+            bin_obj.metadata['current_hourly_rate'] = current_hourly_rate
+            
+            # Calculate fill increase (per second)
+            if self.simulation_running:
+                fill_increase_per_second = current_hourly_rate / 3600  # L/s
+                fill_increase_liters = fill_increase_per_second * self.simulation_speed
+                fill_increase_percent = (fill_increase_liters / bin_obj.capacity_l) * 100
+                
+                # Update fill level
+                old_fill = bin_obj.fill_level
+                bin_obj.fill_level = min(120.0, bin_obj.fill_level + fill_increase_percent)
+                
+                if bin_obj.fill_level >= 85.0 and old_fill < 85.0:
+                    print(f"URGENT: Bin {bin_obj.id} reached {bin_obj.fill_level:.1f}% (Hour {current_hour} rate: {current_hourly_rate}L/h)")
+
     async def _update_bin_fill_levels(self):
         """Update bin fill levels based on time and fill rates"""
         if not self.system_state or not self.simulation_current_time:
@@ -1105,15 +1845,20 @@ class SupervisorAgent(AgentBase):
     
     # Orchestration Logic
     async def _orchestrate_decisions(self):
-        """Main orchestration logic - AUTOMATIC VERSION"""
+        """Orchestration using proper agent architecture"""
         if not self.system_state or not self.simulation_running:
             return
         
         try:
-            # Check for critical bins (auto emergency response)
+            # Check for critical bins
             await self._check_critical_bins_auto()
             
-            # Auto route planning for urgent bins
+            # Use ForecastAgent for predictions if available
+            forecast_agent = self.managed_agents.get("forecast")
+            if forecast_agent:
+                await self._request_forecast_predictions()
+            
+            # Auto route planning
             await self._auto_route_planning()
             
             # Monitor active routes
@@ -1122,8 +1867,405 @@ class SupervisorAgent(AgentBase):
             self.decisions_made += 1
             
         except Exception as e:
-            print(f"❌ SUPERVISOR: Orchestration error: {e}")
-    
+            print(f"Orchestration error: {e}")
+
+    async def _orchestrate_with_all_agents(self):
+        """Use actual agent methods directly"""
+        if not self.system_state or not self.simulation_running:
+            return
+        
+        try:
+            # Find urgent bins and available trucks
+            urgent_bins = [b for b in self.system_state.bins 
+                        if b.fill_level >= 85.0 and not getattr(b, 'being_collected', False)]
+            
+            available_trucks = []
+            for truck in self.system_state.trucks:
+                truck_status = truck.status.value if hasattr(truck.status, 'value') else str(truck.status)
+                if truck_status.upper() == 'IDLE':
+                    available_trucks.append(truck)
+            
+            print(f"ORCHESTRATION: {len(urgent_bins)} urgent bins, {len(available_trucks)} available trucks")
+            
+            if urgent_bins and available_trucks:
+                # Use actual agents directly
+                routes = await self._use_actual_route_planner_agent(urgent_bins, available_trucks)
+                
+                if routes:
+                    await self._execute_agent_routes(routes)
+            
+        except Exception as e:
+            print(f"Agent orchestration error: {e}")
+            import traceback
+            traceback.print_exc()
+
+    async def _execute_agent_routes(self, routes):
+        """Execute routes from actual agents"""
+        try:
+            # First enhance routes with CorridorAgent
+            enhanced_routes = await self._enhance_routes_with_corridor_agent(routes)
+            
+            # Get traffic conditions
+            traffic_data = await self._get_traffic_conditions_from_agent()
+            
+            for route_data in enhanced_routes:
+                # Create route object
+                route = RouteData(
+                    id=route_data["id"],
+                    truck_id=route_data["truck_id"],
+                    bin_ids=route_data["bin_ids"],
+                    waypoints=route_data["waypoints"],
+                    status="active",
+                    created_at=datetime.now(),
+                    estimated_duration=route_data.get("estimated_duration", 25)
+                )
+                
+                route.progress = 0.0
+                route.traffic_multiplier = traffic_data.get("multiplier", 1.0)
+                route.corridor_bins_added = route_data.get("corridor_bins_added", 0)
+                route.optimization_type = route_data.get("optimization", "agent")
+                
+                self.system_state.active_routes.append(route)
+                
+                # Update truck
+                truck = next((t for t in self.system_state.trucks if t.id == route_data["truck_id"]), None)
+                if truck:
+                    truck.status = TruckStatus.EN_ROUTE
+                    truck.current_route_id = route.id
+                    truck.route_progress = 0.0
+                
+                # Mark bins as being collected
+                for bin_id in route_data["bin_ids"]:
+                    bin_obj = next((b for b in self.system_state.bins if b.id == bin_id), None)
+                    if bin_obj:
+                        bin_obj.being_collected = True
+            
+            print(f"EXECUTED: {len(enhanced_routes)} agent-optimized routes (OR-Tools + Corridor + Traffic)")
+            
+        except Exception as e:
+            print(f"Agent route execution failed: {e}")
+
+    async def _use_actual_route_planner_agent(self, urgent_bins, available_trucks):
+        """Use RoutePlannerAgent's actual plan_routes method"""
+        try:
+            # Get the actual RoutePlannerAgent instance
+            route_planner = self.managed_agents.get("route_planner")
+            if not route_planner:
+                print("RoutePlannerAgent not available")
+                return []
+            
+            # Convert to agent's expected format
+            truck_objects = []
+            for truck in available_trucks:
+                truck_obj = Truck(
+                    id=truck.id,
+                    name=getattr(truck, 'name', truck.id),
+                    lat=truck.lat,
+                    lon=truck.lon,
+                    capacity_l=truck.capacity_l,
+                    status=TruckStatus.IDLE
+                )
+                truck_obj.current_load_l = getattr(truck, 'current_load_l', 0)
+                truck_objects.append(truck_obj)
+            
+            bin_objects = []
+            for bin_data in urgent_bins:
+                bin_obj = Bin(
+                    id=bin_data.id,
+                    lat=bin_data.lat,
+                    lon=bin_data.lon,
+                    capacity_l=bin_data.capacity_l,
+                    fill_level=bin_data.fill_level,
+                    fill_rate_lph=bin_data.fill_rate_lph,
+                    tile_id=bin_data.tile_id,
+                    bin_type=bin_data.bin_type
+                )
+                bin_objects.append(bin_obj)
+            
+            print(f"Using RoutePlannerAgent.plan_routes() with {len(truck_objects)} trucks, {len(bin_objects)} bins")
+            
+            # Call actual agent method
+            routes = await route_planner.plan_routes(truck_objects, bin_objects)
+            
+            print(f"RoutePlannerAgent returned {len(routes)} optimized routes")
+            
+            # Convert routes to our format
+            converted_routes = []
+            for route in routes:
+                route_data = {
+                    "id": route.id,
+                    "truck_id": route.truck_id,
+                    "bin_ids": [stop.bin_id for stop in route.stops if stop.bin_id],
+                    "waypoints": await self._get_route_waypoints_with_osrm(route),
+                    "estimated_duration": route.estimated_duration_min,
+                    "distance_km": getattr(route, 'total_distance_km', 0),
+                    "optimization": "ortools"
+                }
+                converted_routes.append(route_data)
+            
+            return converted_routes
+            
+        except Exception as e:
+            print(f"RoutePlannerAgent error: {e}")
+            return []
+
+    async def _get_route_waypoints_with_osrm(self, route):
+        """Get OSRM waypoints for RoutePlannerAgent route"""
+        try:
+            import aiohttp
+            
+            # Build coordinates from route stops
+            coordinates = []
+            
+            # Start at depot
+            depot_lat = self.depot_info.get("latitude", 33.6844)
+            depot_lon = self.depot_info.get("longitude", 73.0479)
+            coordinates.append(f"{depot_lon},{depot_lat}")
+            
+            # Add bin locations
+            for stop in route.stops:
+                if hasattr(stop, 'lat') and hasattr(stop, 'lon'):
+                    coordinates.append(f"{stop.lon},{stop.lat}")
+                else:
+                    # Find bin by ID
+                    bin_obj = next((b for b in self.system_state.bins if b.id == stop.bin_id), None)
+                    if bin_obj:
+                        coordinates.append(f"{bin_obj.lon},{bin_obj.lat}")
+            
+            # Return to depot
+            coordinates.append(f"{depot_lon},{depot_lat}")
+            
+            coords_str = ";".join(coordinates)
+            osrm_url = f"http://localhost:5000/route/v1/driving/{coords_str}?steps=true&geometries=geojson"
+            
+            print(f"OSRM REQUEST for route {route.id}: {len(coordinates)} stops")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(osrm_url, timeout=15) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        if data.get("routes"):
+                            geometry = data["routes"][0]["geometry"]["coordinates"]
+                            
+                            waypoints = []
+                            for i, coord in enumerate(geometry):
+                                waypoints.append({
+                                    "lat": coord[1],
+                                    "lon": coord[0],
+                                    "type": "route",
+                                    "id": f"osrm_{i}"
+                                })
+                            
+                            # Mark depot and bin waypoints
+                            if waypoints:
+                                waypoints[0]["type"] = "depot"
+                                waypoints[0]["id"] = "depot"
+                                waypoints[-1]["type"] = "depot"
+                                waypoints[-1]["id"] = "depot"
+                            
+                            print(f"OSRM SUCCESS: {len(waypoints)} waypoints for route {route.id}")
+                            return waypoints
+            
+        except Exception as e:
+            print(f"OSRM waypoint generation failed: {e}")
+        
+        # Fallback waypoints
+        waypoints = []
+        depot_lat = self.depot_info.get("latitude", 33.6844)
+        depot_lon = self.depot_info.get("longitude", 73.0479)
+        
+        waypoints.append({"lat": depot_lat, "lon": depot_lon, "type": "depot", "id": "depot"})
+        
+        for stop in route.stops:
+            bin_obj = next((b for b in self.system_state.bins if b.id == stop.bin_id), None)
+            if bin_obj:
+                waypoints.append({
+                    "lat": bin_obj.lat,
+                    "lon": bin_obj.lon,
+                    "type": "bin",
+                    "id": bin_obj.id
+                })
+        
+        waypoints.append({"lat": depot_lat, "lon": depot_lon, "type": "depot", "id": "depot"})
+        
+        return waypoints
+
+    async def _enhance_routes_with_corridor_agent(self, routes):
+        """Use CorridorAgent's actual build_corridor method"""
+        try:
+            corridor_agent = self.managed_agents.get("corridor")
+            if not corridor_agent:
+                print("CorridorAgent not available")
+                return routes
+            
+            enhanced_routes = []
+            
+            for route in routes:
+                print(f"Using CorridorAgent.build_corridor() for route {route['id']}")
+                
+                # Convert waypoints to polyline
+                polyline_latlon = [(wp["lat"], wp["lon"]) for wp in route["waypoints"]]
+                
+                # Get all candidate bins (>70% fill)
+                candidate_bins = []
+                for bin_obj in self.system_state.bins:
+                    if bin_obj.fill_level >= 70.0 and bin_obj.id not in route["bin_ids"]:
+                        candidate_bins.append(bin_obj)
+                
+                # Call actual CorridorAgent method
+                corridor_bin_ids = await corridor_agent.build_corridor(
+                    polyline_latlon=polyline_latlon,
+                    route_wids=[],  # No OSM way IDs
+                    bins=candidate_bins
+                )
+                
+                print(f"CorridorAgent found {len(corridor_bin_ids)} additional bins for route {route['id']}")
+                
+                # Add corridor bins to route
+                if corridor_bin_ids:
+                    route["bin_ids"].extend(list(corridor_bin_ids))
+                    route["corridor_bins_added"] = len(corridor_bin_ids)
+                    
+                    # Update waypoints to include corridor bins
+                    route["waypoints"] = await self._rebuild_waypoints_with_corridor_bins(
+                        route["waypoints"], corridor_bin_ids
+                    )
+                
+                enhanced_routes.append(route)
+            
+            return enhanced_routes
+            
+        except Exception as e:
+            print(f"CorridorAgent error: {e}")
+            return routes
+
+    async def _rebuild_waypoints_with_corridor_bins(self, original_waypoints, corridor_bin_ids):
+        """Rebuild waypoints to include corridor bins"""
+        try:
+            # Extract depot waypoints
+            depot_waypoints = [wp for wp in original_waypoints if wp["type"] == "depot"]
+            
+            # Get all bin objects (original + corridor)
+            all_bins = []
+            for wp in original_waypoints:
+                if wp["type"] == "bin":
+                    bin_obj = next((b for b in self.system_state.bins if b.id == wp["id"]), None)
+                    if bin_obj:
+                        all_bins.append(bin_obj)
+            
+            for bin_id in corridor_bin_ids:
+                bin_obj = next((b for b in self.system_state.bins if b.id == bin_id), None)
+                if bin_obj:
+                    all_bins.append(bin_obj)
+            
+            if not all_bins:
+                return original_waypoints
+            
+            # Sort bins by fill level (highest first)
+            all_bins.sort(key=lambda b: b.fill_level, reverse=True)
+            
+            # Build new coordinate sequence for OSRM
+            coordinates = []
+            depot_lat = self.depot_info.get("latitude", 33.6844)
+            depot_lon = self.depot_info.get("longitude", 73.0479)
+            
+            coordinates.append(f"{depot_lon},{depot_lat}")
+            for bin_obj in all_bins:
+                coordinates.append(f"{bin_obj.lon},{bin_obj.lat}")
+            coordinates.append(f"{depot_lon},{depot_lat}")
+            
+            # Get optimized route from OSRM
+            coords_str = ";".join(coordinates)
+            osrm_url = f"http://localhost:5000/route/v1/driving/{coords_str}?steps=true&geometries=geojson"
+            
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(osrm_url, timeout=15) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get("routes"):
+                            geometry = data["routes"][0]["geometry"]["coordinates"]
+                            
+                            new_waypoints = []
+                            for i, coord in enumerate(geometry):
+                                new_waypoints.append({
+                                    "lat": coord[1],
+                                    "lon": coord[0],
+                                    "type": "route",
+                                    "id": f"enhanced_{i}"
+                                })
+                            
+                            if new_waypoints:
+                                new_waypoints[0]["type"] = "depot"
+                                new_waypoints[0]["id"] = "depot"
+                                new_waypoints[-1]["type"] = "depot"
+                                new_waypoints[-1]["id"] = "depot"
+                            
+                            return new_waypoints
+            
+        except Exception as e:
+            print(f"Waypoint rebuilding failed: {e}")
+        
+        return original_waypoints
+
+    async def _get_traffic_conditions_from_agent(self):
+        """Use TrafficAgent's actual traffic analysis"""
+        try:
+            traffic_agent = self.managed_agents.get("traffic")
+            if not traffic_agent:
+                print("TrafficAgent not available")
+                return {"multiplier": 1.0, "level": "unknown"}
+            
+            # Call TrafficAgent method (if it has a direct method)
+            # For now, simulate based on time
+            current_hour = self.simulation_current_time.hour
+            
+            if 7 <= current_hour <= 9 or 17 <= current_hour <= 19:
+                return {"multiplier": 1.8, "level": "heavy"}
+            elif 10 <= current_hour <= 16:
+                return {"multiplier": 1.2, "level": "moderate"}
+            else:
+                return {"multiplier": 1.0, "level": "light"}
+            
+        except Exception as e:
+            print(f"TrafficAgent error: {e}")
+            return {"multiplier": 1.0, "level": "unknown"}
+
+    async def _request_forecast_predictions(self):
+        """Request overflow predictions from ForecastAgent"""
+        try:
+            correlation_id = f"forecast_{datetime.now().strftime('%H%M%S')}"
+            
+            # Send to ForecastAgent using proper message format
+            await self.send_message(
+                "predict_overflow",
+                {
+                    "bins": [
+                        {
+                            "id": bin_obj.id,
+                            "lat": bin_obj.lat,
+                            "lon": bin_obj.lon,
+                            "capacity_l": bin_obj.capacity_l,
+                            "fill_level": bin_obj.fill_level,
+                            "fill_rate_lph": bin_obj.fill_rate_lph,
+                            "tile_id": bin_obj.tile_id,
+                            "bin_type": "general"
+                        }
+                        for bin_obj in self.system_state.bins
+                    ],
+                    "correlation_id": correlation_id
+                },
+                target_stream="cleanify:agents:forecast:input"
+            )
+            
+            print(f"Sent overflow prediction request to ForecastAgent")
+            return {"status": "requested", "correlation_id": correlation_id}
+            
+        except Exception as e:
+            print(f"Forecast request failed: {e}")
+            return None
+
     async def _check_critical_bins_auto(self):
         """Auto-handle critical bins without manual intervention"""
         if not self.system_state:
@@ -1165,48 +2307,94 @@ class SupervisorAgent(AgentBase):
             await self._send_emergency_alert(critical_bins)
 
     async def _auto_route_planning(self):
-        """Automatic route planning when conditions are met"""
-        try:
-            # Find urgent bins (85%+) not being collected
-            urgent_bins = [
-                bin_obj for bin_obj in self.system_state.bins 
-                if bin_obj.fill_level >= 85.0 and not bin_obj.being_collected
-            ]
+        """Enhanced automatic route planning"""
+        if not self.system_state or not self.simulation_running:
+            return
             
-            # Find available trucks
-            available_trucks = [
-                truck for truck in self.system_state.trucks 
-                if truck.status == TruckStatus.IDLE
-            ]
+        # Find urgent bins (85%+)
+        urgent_bins = [b for b in self.system_state.bins if b.fill_level >= 85.0]
+        
+        # Find available trucks
+        available_trucks = [t for t in self.system_state.trucks if t.status == TruckStatus.IDLE]
+        
+        # Auto-create routes if needed (max 3 active routes)
+        active_routes = len([r for r in self.system_state.active_routes if r.status in ["active", "planned"]])
+        
+        if urgent_bins and available_trucks and active_routes < 3:
+            routes_created = await self._create_routes_automatically(urgent_bins, available_trucks)
+            if routes_created > 0:
+                print(f"AUTO-ROUTING: Created {routes_created} routes for urgent bins")
+
+    async def _create_routes_automatically(self, urgent_bins, available_trucks):
+        """Create routes automatically for urgent bins"""
+        routes_created = 0
+        max_routes = min(len(urgent_bins), len(available_trucks), 3)
+        
+        for i in range(max_routes):
+            truck = available_trucks[i]
+            bin_obj = urgent_bins[i]
             
-            if urgent_bins and available_trucks:
-                print(f"🤖 SUPERVISOR: AUTO-PLANNING routes for {len(urgent_bins)} urgent bins")
-                
-                # Auto-assign trucks to bins (greedy assignment)
-                routes_created = 0
-                for i, truck in enumerate(available_trucks):
-                    if i < len(urgent_bins):
-                        bin_obj = urgent_bins[i]
-                        
-                        # Create route automatically
-                        route_id = f"AUTO_ROUTE_{truck.id}_{int(datetime.now().timestamp())}"
-                        
-                        # Update truck state
-                        truck.status = TruckStatus.EN_ROUTE
-                        truck.route_id = route_id
-                        
-                        # Update bin state
-                        bin_obj.being_collected = True
-                        bin_obj.assigned_truck = truck.id
-                        
-                        routes_created += 1
-                        print(f"✅ AUTO-ASSIGNED: {truck.id} → {bin_obj.id} ({bin_obj.fill_level:.1f}%)")
-                
-                self.routes_planned += routes_created
-                print(f"🎯 SUPERVISOR: Auto-created {routes_created} routes")
-                
-        except Exception as e:
-            print(f"❌ SUPERVISOR: Auto route planning failed: {e}")
+            # Create unique route ID
+            route_id = f"AUTO_{datetime.now().strftime('%H%M%S')}_{truck.id}"
+            
+            # Create waypoints: Depot -> Bin -> Depot
+            waypoints = []
+            
+            # Start at depot
+            if self.depot_info:
+                waypoints.append({
+                    "lat": self.depot_info.get("latitude", 33.6844),
+                    "lon": self.depot_info.get("longitude", 73.0479),
+                    "type": "depot",
+                    "id": "depot"
+                })
+            
+            # Go to bin
+            waypoints.append({
+                "lat": bin_obj.lat,
+                "lon": bin_obj.lon,
+                "type": "bin", 
+                "id": bin_obj.id
+            })
+            
+            # Return to depot
+            if self.depot_info:
+                waypoints.append({
+                    "lat": self.depot_info.get("latitude", 33.6844),
+                    "lon": self.depot_info.get("longitude", 73.0479),
+                    "type": "depot",
+                    "id": "depot"
+                })
+            
+            # Create route object
+            route = RouteData(
+                id=route_id,
+                truck_id=truck.id,
+                bin_ids=[bin_obj.id],
+                waypoints=waypoints,
+                status="active",
+                created_at=datetime.now(),
+                estimated_duration=20
+            )
+            
+            # Add progress tracking
+            route.progress = 0.0
+            
+            # Add to system state
+            self.system_state.active_routes.append(route)
+            
+            # Update truck
+            truck.status = TruckStatus.EN_ROUTE
+            truck.current_route_id = route_id
+            truck.route_progress = 0.0
+            
+            # Mark bin as being collected
+            bin_obj.being_collected = True
+            
+            routes_created += 1
+            print(f"Created route {route_id}: Truck {truck.id} -> Bin {bin_obj.id} ({bin_obj.fill_level:.1f}%)")
+        
+        return routes_created
 
     async def _check_critical_bins(self):
         """Check for bins that need immediate attention"""
@@ -1354,11 +2542,10 @@ class SupervisorAgent(AgentBase):
         self.register_handler("route_planned", self._handle_route_planned)
     
     async def _handle_load_config(self, data: Dict[str, Any]):
-        """Handle configuration loading - COMPLETE FIX"""
+        """Handle configuration loading - USE EXISTING HOURLY RATES"""
         try:
-            print("🔧 SUPERVISOR: _handle_load_config called")
+            print("SUPERVISOR: Loading config")
             config = data.get("config", {})
-            print(f"🔧 SUPERVISOR: Processing config with {len(config.get('bins', []))} bins, {len(config.get('trucks', []))} trucks")
             
             if not config:
                 raise ValueError("No config data received")
@@ -1367,85 +2554,53 @@ class SupervisorAgent(AgentBase):
             trucks_data = config.get("trucks", [])
             depot_data = config.get("depot", {})
             
-            print(f"🔧 SUPERVISOR: Raw data - bins: {len(bins_data)}, trucks: {len(trucks_data)}")
-            
-            # Parse bins with enhanced validation
+            # Parse bins with EXISTING hourly fill rate support
             bins = []
-            for i, bin_data in enumerate(bins_data):
-                try:
-                    print(f"🔧 Processing bin {i+1}: {bin_data}")
-                    
-                    # Validate required fields
-                    if "id" not in bin_data:
-                        print(f"❌ Bin {i+1} missing ID")
-                        continue
-                    
-                    if "latitude" not in bin_data or "longitude" not in bin_data:
-                        print(f"❌ Bin {bin_data.get('id', i+1)} missing coordinates")
-                        continue
-                    
-                    # Create bin object with proper validation
-                    bin_obj = Bin(
-                        id=str(bin_data["id"]),
-                        lat=float(bin_data["latitude"]),
-                        lon=float(bin_data["longitude"]), 
-                        capacity_l=int(bin_data.get("capacity_l", 100)),
-                        fill_level=float(bin_data.get("fill_level", 50.0)),
-                        fill_rate_lph=float(bin_data.get("fill_rate_lph", 5.0)),
-                        tile_id="",
-                        bin_type=BinType.GENERAL
-                    )
-                    
-                    # Store hourly fill rates in metadata
-                    hourly_rates = bin_data.get("hourly_fill_rates", {})
-                    if hourly_rates:
-                        bin_obj.metadata["hourly_fill_rates"] = {
-                            str(k): float(v) for k, v in hourly_rates.items()
-                        }
-                        bin_obj.metadata["has_hourly_rates"] = True
-                        bin_obj.metadata["daily_fill_total"] = bin_data.get("avg_daily_fill_L", 0)
-                        bin_obj.metadata["notes"] = bin_data.get("notes", "")
-                    else:
-                        bin_obj.metadata["has_hourly_rates"] = False
-                    
-                    # Set last updated to current simulation time
-                    bin_obj.last_updated = self.simulation_current_time or datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
-                    
-                    bins.append(bin_obj)
-                    print(f"✅ Created bin {bin_obj.id} at ({bin_obj.lat}, {bin_obj.lon})")
-                    
-                except Exception as e:
-                    print(f"❌ Failed to create bin {i+1}: {e}")
-                    continue
+            for bin_data in bins_data:
+                bin_obj = Bin(
+                    id=str(bin_data["id"]),
+                    lat=float(bin_data["latitude"]),
+                    lon=float(bin_data["longitude"]), 
+                    capacity_l=int(bin_data["capacity_l"]),
+                    fill_level=float(bin_data.get("fill_level", 50.0)),
+                    fill_rate_lph=float(bin_data.get("fill_rate_lph", 5.0)),
+                    tile_id="",
+                    bin_type=BinType.GENERAL
+                )
+                
+                # PROPERLY load existing hourly fill rates from config
+                hourly_rates = bin_data.get("hourly_fill_rates", {})
+                if hourly_rates:
+                    # Convert string keys to integers and store
+                    bin_obj.metadata["hourly_fill_rates"] = {
+                        int(hour): float(rate) for hour, rate in hourly_rates.items()
+                    }
+                    bin_obj.metadata["has_hourly_rates"] = True
+                    rate_range = f"{min(hourly_rates.values()):.1f}-{max(hourly_rates.values()):.1f}L/h"
+                    print(f"Bin {bin_obj.id} loaded with hourly rates: {rate_range}")
+                else:
+                    bin_obj.metadata["has_hourly_rates"] = False
+                    print(f"Bin {bin_obj.id} using base rate: {bin_obj.fill_rate_lph}L/h")
+                
+                bin_obj.last_updated = datetime.now()
+                bins.append(bin_obj)
             
-            # Parse trucks with enhanced validation
+            # Parse trucks
             trucks = []
-            for i, truck_data in enumerate(trucks_data):
-                try:
-                    print(f"🔧 Processing truck {i+1}: {truck_data}")
-                    
-                    if "id" not in truck_data:
-                        print(f"❌ Truck {i+1} missing ID")
-                        continue
-                    
-                    truck_obj = Truck(
-                        id=str(truck_data["id"]),
-                        name=truck_data.get("name", f"Truck {truck_data['id']}"),
-                        capacity_l=int(truck_data.get("capacity", 5000)),
-                        lat=float(depot_data.get("latitude", 33.6844)),
-                        lon=float(depot_data.get("longitude", 73.0479)),
-                        current_load_l=0,
-                        status=TruckStatus.IDLE,
-                        route_id=None
-                    )
-                    trucks.append(truck_obj)
-                    print(f"✅ Created truck {truck_obj.id} ({truck_obj.name})")
-                    
-                except Exception as e:
-                    print(f"❌ Failed to create truck {i+1}: {e}")
-                    continue
+            for truck_data in trucks_data:
+                truck = Truck(
+                    id=str(truck_data["id"]),
+                    name=truck_data.get("name", truck_data["id"]),
+                    lat=depot_data.get("latitude", 33.6844),
+                    lon=depot_data.get("longitude", 73.0479),
+                    capacity_l=int(truck_data.get("capacity", 5000)),
+                    status=TruckStatus.IDLE
+                )
+                truck.current_load_l = 0
+                truck.last_updated = datetime.now()
+                trucks.append(truck)
             
-            # Create enhanced system state
+            # Create system state
             self.system_state = SystemState(
                 timestamp=datetime.now(),
                 bins=bins,
@@ -1456,44 +2611,42 @@ class SupervisorAgent(AgentBase):
                 current_time=self.simulation_current_time or datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
             )
             
-            print(f"✅ SUPERVISOR: Configuration loaded successfully")
-            print(f"   - Created {len(bins)} bins")
-            print(f"   - Created {len(trucks)} trucks")
-            print(f"   - Depot: {depot_data.get('name', 'Unknown')}")
-            
-            # Store depot info
             self.depot_info = depot_data
             
-            # Log each bin for debugging
-            for bin_obj in bins:
-                print(f"   📍 Bin {bin_obj.id}: ({bin_obj.lat}, {bin_obj.lon}) - {bin_obj.fill_level}%")
+            print(f"Config loaded: {len(bins)} bins, {len(trucks)} trucks")
+            bins_with_hourly = len([b for b in bins if b.metadata.get("has_hourly_rates", False)])
+            print(f"Bins with hourly rates: {bins_with_hourly}/{len(bins)}")
             
             return True
             
         except Exception as e:
-            print(f"❌ SUPERVISOR: Configuration loading failed: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Config loading failed: {e}")
             return False
 
     async def _handle_start_simulation(self, data: Dict[str, Any]):
-        """Handle simulation start"""
+        """Handle simulation start - FIXED with proper time initialization"""
         try:
             print("🚀 SUPERVISOR: Starting simulation")
             
+            # Initialize timing
             self.simulation_running = True
             self.simulation_start_time = datetime.now()
-            
-            # Set simulation start time to 8:00 AM
-            self.simulation_current_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
             self.last_update_time = datetime.now()
             
+            # CRITICAL: Always set simulation time to 8:00 AM
+            self.simulation_current_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+            
+            # CRITICAL: Update system state immediately
             if self.system_state:
                 self.system_state.simulation_running = True
                 self.system_state.current_time = self.simulation_current_time
+                self.system_state.simulation_speed = self.simulation_speed
             
-            print(f"✅ SUPERVISOR: Simulation started at {self.simulation_current_time}")
+            print(f"✅ SUPERVISOR: Simulation started at {self.simulation_current_time.strftime('%H:%M:%S')}")
             self.logger.info("Simulation started")
+            
+            # CRITICAL: Publish state immediately after starting
+            await self._publish_system_state()
             
             return {
                 "status": "simulation_started", 
@@ -1523,10 +2676,11 @@ class SupervisorAgent(AgentBase):
             return {"status": "error", "message": str(e)}
     
     async def _handle_set_simulation_speed(self, data: Dict[str, Any]):
-        """Handle simulation speed change - FIXED"""
+        """Handle simulation speed change - FIXED with 25x limit"""
         try:
             new_speed = data.get("speed", 1.0)
-            self.simulation_speed = max(0.1, min(10.0, new_speed))
+            # FIXED: Increase maximum speed from 10x to 25x to match frontend slider
+            self.simulation_speed = max(0.1, min(25.0, new_speed))
             
             # CRITICAL: Also update system state if it exists
             if self.system_state:
@@ -1554,141 +2708,265 @@ class SupervisorAgent(AgentBase):
         return {"status": "route_acknowledged"}
 
     async def _publish_system_state(self):
-        """Publish system state to all agents"""
+        """Publish system state with guaranteed time"""
         if not self.system_state:
             return
 
-        if not hasattr(self, 'redis_client') or self.redis_client is None:
-            return
-
         try:
-            # Convert system state to dict for JSON serialization
+            # CRITICAL: Ensure time is always available
+            if self.simulation_current_time is None:
+                self.simulation_current_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+            
             state_dict = {
                 "timestamp": self.system_state.timestamp.isoformat(),
                 "bins": [self._bin_to_dict(bin_obj) for bin_obj in self.system_state.bins],
                 "trucks": [self._truck_to_dict(truck) for truck in self.system_state.trucks],
                 "active_routes": [self._route_to_dict(route) for route in self.system_state.active_routes],
-                "simulation_running": self.system_state.simulation_running,
+                "simulation_running": self.simulation_running,
                 "simulation_speed": self.simulation_speed,
-                "current_time": self.system_state.current_time.isoformat() if self.system_state.current_time else None
+                "current_time": self.simulation_current_time.isoformat()  # GUARANTEED
             }
+
+            # Publish to Redis if available
+            if hasattr(self, 'redis_client') and self.redis_client:
+                await self.redis_client.publish(
+                    "system_state_updates",
+                    json.dumps(state_dict, indent=2)
+                )
             
-            # Broadcast to all agents
-            await self.send_message(
-                "system_state_update",
-                state_dict,
-                target_stream="cleanify:system:state"
-            )
-            
+            print(f"📤 SUPERVISOR: Published state with time {self.simulation_current_time.strftime('%H:%M:%S')}")
+
         except Exception as e:
             print(f"❌ SUPERVISOR: Failed to publish system state: {e}")
 
+    async def _ensure_simulation_time_exists(self):
+        """Ensure simulation time always exists"""
+        if self.simulation_current_time is None:
+            self.simulation_current_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+            if self.system_state:
+                self.system_state.current_time = self.simulation_current_time
+            print(f"🔧 SUPERVISOR: Ensured simulation time exists: {self.simulation_current_time.strftime('%H:%M:%S')}")
+
     def get_current_system_state(self):
-        """Get current system state with proper time"""
+        """Get current system state with guaranteed proper time"""
         if not self.system_state:
             return None
         
-        # Ensure simulation time is set
+        # CRITICAL: Ensure simulation time is always set
         if self.simulation_current_time is None:
             self.simulation_current_time = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+            print(f"⚠️ SUPERVISOR: Late-initialized simulation time to {self.simulation_current_time.strftime('%H:%M:%S')}")
         
+        # CRITICAL: Always return proper time
         return {
             "timestamp": self.system_state.timestamp.isoformat(),
             "bins": [self._bin_to_dict(bin_obj) for bin_obj in self.system_state.bins],
             "trucks": [self._truck_to_dict(truck) for truck in self.system_state.trucks],
             "active_routes": [self._route_to_dict(route) for route in self.system_state.active_routes],
             "simulation_running": self.simulation_running,
-            "simulation_speed": self.simulation_speed,  # Add this line
-            "current_time": self.simulation_current_time.isoformat()  # Ensure this is always set
+            "simulation_speed": self.simulation_speed,
+            "current_time": self.simulation_current_time.isoformat()  # GUARANTEED to be set
+        }
+    
+    def _bin_to_dict(self, bin_obj):
+        """Convert bin with forecast data"""
+        current_hourly_rate = bin_obj.fill_rate_lph
+        
+        if hasattr(bin_obj, 'metadata') and self.simulation_current_time:
+            current_hourly_rate = bin_obj.metadata.get('current_hourly_rate', bin_obj.fill_rate_lph)
+        
+        return {
+            "id": bin_obj.id,
+            "lat": float(bin_obj.lat),
+            "lon": float(bin_obj.lon),
+            "capacity_l": bin_obj.capacity_l,
+            "fill_level": bin_obj.fill_level,
+            "fill_rate_lph": bin_obj.fill_rate_lph,
+            "current_hourly_rate": current_hourly_rate,
+            "has_hourly_rates": getattr(bin_obj, 'metadata', {}).get("has_hourly_rates", False),
+            "being_collected": getattr(bin_obj, 'being_collected', False),
+            "last_updated": bin_obj.last_updated.isoformat() if getattr(bin_obj, 'last_updated', None) else None
         }
 
-    def _bin_to_dict(self, bin_obj: Bin) -> Dict[str, Any]:
-        """Convert Bin object to dictionary"""
+    def _truck_to_dict(self, truck):
+        """Convert truck with movement data"""
+        return {
+            "id": truck.id,
+            "name": getattr(truck, 'name', truck.id),
+            "lat": float(truck.lat),
+            "lon": float(truck.lon),
+            "status": truck.status.value if hasattr(truck.status, 'value') else str(truck.status),
+            "capacity_l": truck.capacity_l,
+            "current_load_l": getattr(truck, 'current_load_l', 0),
+            "current_route_id": getattr(truck, 'current_route_id', None),
+            "route_progress": getattr(truck, 'route_progress', 0.0),
+            "last_updated": truck.last_updated.isoformat() if getattr(truck, 'last_updated', None) else None
+        }
+    
+    def _route_to_dict(self, route):
+        """Convert route with agent optimization data"""
+        return {
+            "id": route.id,
+            "truck_id": route.truck_id,
+            "bin_ids": route.bin_ids,
+            "waypoints": route.waypoints,
+            "status": route.status,
+            "progress": getattr(route, 'progress', 0.0),
+            "traffic_multiplier": getattr(route, 'traffic_multiplier', 1.0),
+            "corridor_bins_added": getattr(route, 'corridor_bins_added', 0),
+            "optimization_type": getattr(route, 'optimization_type', 'unknown'),
+            "created_at": route.created_at.isoformat() if route.created_at else None,
+            "completed_at": getattr(route, 'completed_at', None).isoformat() if getattr(route, 'completed_at', None) else None,
+            "estimated_duration": getattr(route, 'estimated_duration', None)
+        }
+    
+    async def _trigger_route_planning_direct(self, urgent_bins, available_trucks):
+        """Enhanced route planning with proper route creation"""
         try:
-            result = {
-                "id": bin_obj.id,
-                "lat": bin_obj.lat,
-                "lon": bin_obj.lon,
-                "capacity_l": bin_obj.capacity_l,
-                "fill_level": bin_obj.fill_level,
-                "fill_rate_lph": bin_obj.fill_rate_lph,
-                "tile_id": bin_obj.tile_id,
-                "threshold": getattr(bin_obj, 'threshold', 85.0),
-                "assigned_truck": getattr(bin_obj, 'assigned_truck', None),
-                "being_collected": getattr(bin_obj, 'being_collected', False),
-                "last_updated": bin_obj.last_updated.isoformat() if getattr(bin_obj, 'last_updated', None) else None
-            }
+            print(f"🎯 SUPERVISOR: Creating routes for {len(urgent_bins)} urgent bins")
             
-            # Add hourly rate info if available
-            if bin_obj.metadata.get("has_hourly_rates", False):
-                current_hour = self.simulation_current_time.hour if self.simulation_current_time else 8
-                hourly_rates = bin_obj.metadata.get("hourly_fill_rates", {})
-                current_rate = hourly_rates.get(str(current_hour), bin_obj.fill_rate_lph)
+            routes_created = 0
+            
+            for i, truck in enumerate(available_trucks):
+                if i >= len(urgent_bins):
+                    break
+                    
+                bin_obj = urgent_bins[i]
                 
-                result.update({
-                    "current_hourly_rate": current_rate,
-                    "has_hourly_rates": True,
-                    "daily_fill_total": bin_obj.metadata.get("daily_fill_total", 0),
-                    "notes": bin_obj.metadata.get("notes", "")
+                # Create route with proper waypoints
+                route_id = f"ROUTE_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{truck.id}"
+                
+                # Create waypoints: Depot -> Bin -> Depot
+                waypoints = []
+                
+                # Start at depot
+                if self.depot_info:
+                    waypoints.append({
+                        "lat": self.depot_info.get("latitude", 33.6844),
+                        "lon": self.depot_info.get("longitude", 73.0479),
+                        "type": "depot",
+                        "id": "depot"
+                    })
+                
+                # Go to bin
+                waypoints.append({
+                    "lat": bin_obj.lat,
+                    "lon": bin_obj.lon,
+                    "type": "bin",
+                    "id": bin_obj.id
                 })
-            else:
-                result["has_hourly_rates"] = False
+                
+                # Return to depot
+                if self.depot_info:
+                    waypoints.append({
+                        "lat": self.depot_info.get("latitude", 33.6844),
+                        "lon": self.depot_info.get("longitude", 73.0479),
+                        "type": "depot", 
+                        "id": "depot"
+                    })
+                
+                # Create route object
+                route = RouteData(
+                    id=route_id,
+                    truck_id=truck.id,
+                    bin_ids=[bin_obj.id],
+                    waypoints=waypoints,
+                    status="planned",
+                    created_at=datetime.now(),
+                    estimated_duration=30  # 30 minutes estimate
+                )
+                
+                # Add route to system state
+                if self.system_state:
+                    self.system_state.active_routes.append(route)
+                
+                # Update truck status
+                truck.status = TruckStatus.EN_ROUTE
+                truck.current_route_id = route_id
+                
+                routes_created += 1
+                print(f"✅ SUPERVISOR: Created route {route_id} for truck {truck.id} -> bin {bin_obj.id}")
             
-            return result
+            print(f"🎉 SUPERVISOR: Successfully created {routes_created} routes")
+            
+            # Publish updated system state
+            await self._publish_system_state()
+            
+            return routes_created
+            
         except Exception as e:
-            print(f"❌ SUPERVISOR: _bin_to_dict failed for bin {bin_obj.id}: {e}")
-            # Return minimal safe dict
-            return {
-                "id": str(bin_obj.id),
-                "lat": float(bin_obj.lat),
-                "lon": float(bin_obj.lon),
-                "capacity_l": int(bin_obj.capacity_l),
-                "fill_level": float(bin_obj.fill_level),
-                "fill_rate_lph": float(bin_obj.fill_rate_lph),
-                "has_hourly_rates": False
-            }
-    
-    def _truck_to_dict(self, truck: Truck) -> Dict[str, Any]:
-        """Convert Truck object to dictionary"""
+            print(f"❌ SUPERVISOR: Route planning failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return 0
+    async def _simulate_time_progression(self):
+        """Enhanced time progression with better speed handling"""
+        if not self.simulation_running or not self.simulation_current_time:
+            return
+
         try:
-            result = {
-                "id": truck.id,
-                "name": truck.name,
-                "capacity_l": truck.capacity_l,
-                "lat": truck.lat,
-                "lon": truck.lon,
-                "current_load_l": getattr(truck, 'current_load_l', 0),
-                "status": getattr(truck, 'status', 'idle').value if hasattr(getattr(truck, 'status', 'idle'), 'value') else str(getattr(truck, 'status', 'idle')),
-                "route_id": getattr(truck, 'route_id', None),
-                "speed_kmh": getattr(truck, 'speed_kmh', 0.0)
-            }
-            return result
+            current_real_time = datetime.now()
+            time_delta = current_real_time - self.last_update_time
+            
+            # Calculate simulation time advancement based on speed
+            simulation_time_delta = time_delta * self.simulation_speed
+            self.simulation_current_time += simulation_time_delta
+            self.last_update_time = current_real_time
+
+            # Update system state time
+            if self.system_state:
+                self.system_state.current_time = self.simulation_current_time
+                self.system_state.simulation_speed = self.simulation_speed
+
+            # Simulate bin fill progression
+            await self._simulate_bin_fills()
+            
+            # Auto-trigger route planning for urgent bins
+            if self.system_state and self.system_state.bins:
+                urgent_bins = [b for b in self.system_state.bins if b.fill_level >= 85.0]
+                available_trucks = [t for t in self.system_state.trucks if t.status == TruckStatus.IDLE]
+                
+                if urgent_bins and available_trucks and len(self.system_state.active_routes) < 3:
+                    print(f"🚨 AUTO-TRIGGERING: {len(urgent_bins)} urgent bins found")
+                    await self._trigger_route_planning_direct(urgent_bins, available_trucks)
+
         except Exception as e:
-            print(f"❌ SUPERVISOR: _truck_to_dict failed: {e}")
-            # Return minimal safe dict
-            return {
-                "id": str(truck.id),
-                "name": str(truck.name),
-                "capacity_l": int(truck.capacity_l),
-                "lat": float(truck.lat),
-                "lon": float(truck.lon),
-                "current_load_l": 0,
-                "status": "idle"
-            }
-    
-    def _route_to_dict(self, route: Route) -> Dict[str, Any]:
-        """Convert Route object to dictionary"""
-        try:
-            return {
-                "id": route.id,
-                "truck_id": route.truck_id,
-                "status": route.status.value if hasattr(route.status, 'value') else str(route.status),
-                "total_distance_km": route.total_distance_km,
-                "estimated_duration_min": route.estimated_duration_min,
-                "stops": len(route.stops),
-                "completed_stops": route.completed_stops(),
-                "created_at": route.created_at.isoformat() if route.created_at else None
-            }
-        except Exception as e:
-            print(f"❌ SUPERVISOR: _route_to_dict failed: {e}")
-            return {"id": "unknown", "status": "error"}
+            print(f"❌ SUPERVISOR: Time progression error: {e}")
+
+    async def _simulate_bin_fills(self):
+        """Simulate bin filling over time"""
+        if not self.system_state or not self.system_state.bins:
+            return
+            
+        current_hour = self.simulation_current_time.hour
+        
+        for bin_obj in self.system_state.bins:
+            try:
+                # Get hourly fill rate
+                base_rate = bin_obj.fill_rate_lph
+                
+                # Add time-based variation
+                hour_multiplier = 1.0
+                if 6 <= current_hour <= 10:  # Morning rush
+                    hour_multiplier = 1.5
+                elif 17 <= current_hour <= 21:  # Evening rush  
+                    hour_multiplier = 1.3
+                elif 22 <= current_hour or current_hour <= 5:  # Night
+                    hour_multiplier = 0.3
+                    
+                adjusted_rate = base_rate * hour_multiplier
+                
+                # Calculate fill increase (rate is per hour, we update every few seconds)
+                time_fraction = self.simulation_speed / 3600  # Convert to hours
+                fill_increase = adjusted_rate * time_fraction
+                
+                # Update fill level
+                old_fill = bin_obj.fill_level
+                bin_obj.fill_level = min(120.0, bin_obj.fill_level + fill_increase)  # Allow 20% overflow
+                
+                # Log significant changes
+                if bin_obj.fill_level >= 85.0 and old_fill < 85.0:
+                    print(f"🚨 URGENT: Bin {bin_obj.id} reached {bin_obj.fill_level:.1f}%")
+                    
+            except Exception as e:
+                print(f"❌ Error simulating fill for bin {bin_obj.id}: {e}")

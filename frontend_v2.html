@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cleanify v2-alpha Control Panel - Fixed</title>
+    <title>Cleanify v2-alpha Control Panel</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         * {
@@ -23,10 +23,10 @@
         .control-panel {
             display: grid;
             grid-template-areas: 
-                "header header"
-                "sidebar map"
-                "status map";
-            grid-template-columns: 350px 1fr;
+                "header header header"
+                "sidebar map bins-status"
+                "status map bins-status";
+            grid-template-columns: 350px 1fr 350px;
             grid-template-rows: 60px 1fr 120px;
             height: 100vh;
         }
@@ -73,6 +73,112 @@
             border-right: 1px solid rgba(255, 255, 255, 0.1);
         }
 
+        .bins-status-sidebar {
+            grid-area: bins-status;
+            background: rgba(0, 0, 0, 0.4);
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .bins-status-title {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #4CAF50;
+        }
+
+        .bin-status-item {
+            margin-bottom: 15px;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .bin-status-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .bin-id {
+            font-weight: bold;
+            font-size: 0.9rem;
+        }
+
+        .bin-fill-percentage {
+            font-size: 0.8rem;
+            opacity: 0.8;
+        }
+
+        .bin-fill-bar {
+            position: relative;
+            height: 30px;
+            background: #333;
+            border-radius: 15px;
+            overflow: hidden;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .bin-fill-level {
+            position: absolute;
+            left: 0;
+            top: 0;
+            height: 100%;
+            background: linear-gradient(90deg, #ff4444, #ff6666);
+            transition: width 0.3s ease;
+            border-radius: 13px 0 0 13px;
+        }
+
+        .bin-overflow-area {
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: 20%;
+            height: 100%;
+            background: rgba(128, 128, 128, 0.3);
+            border-radius: 0 13px 13px 0;
+        }
+
+        .bin-fill-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 0.75rem;
+            font-weight: bold;
+            color: white;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+            z-index: 10;
+        }
+
+        .bin-details {
+            margin-top: 8px;
+            font-size: 0.75rem;
+            opacity: 0.8;
+        }
+
+        .bin-detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 2px;
+        }
+
+        .hourly-rate-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-left: 5px;
+        }
+
+        .rate-low { background: #4CAF50; }
+        .rate-medium { background: #FFC107; }
+        .rate-high { background: #FF9800; }
+        .rate-critical { background: #F44336; }
+
         .map-container {
             grid-area: map;
             position: relative;
@@ -83,161 +189,146 @@
             height: 100%;
         }
 
-        .status-bar {
-            grid-area: status;
-            background: rgba(0, 0, 0, 0.4);
-            padding: 15px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
         .sidebar-section {
             padding: 20px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .section-title {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: #4CAF50;
+            font-size: 1.1rem;
+            font-weight: bold;
             margin-bottom: 15px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
+            color: #4CAF50;
         }
 
-        .config-controls {
+        .config-upload {
             display: flex;
             flex-direction: column;
             gap: 10px;
         }
 
-        .btn {
-            padding: 10px 15px;
-            border: none;
-            border-radius: 6px;
-            background: #4CAF50;
-            color: white;
+        .file-input-wrapper {
+            position: relative;
             cursor: pointer;
-            font-size: 0.9rem;
-            transition: all 0.3s ease;
-        }
-
-        .btn:hover {
-            background: #45a049;
-            transform: translateY(-1px);
-        }
-
-        .btn:disabled {
-            background: #666;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .btn-secondary {
-            background: #2196F3;
-        }
-
-        .btn-secondary:hover {
-            background: #1976D2;
-        }
-
-        .btn-danger {
-            background: #F44336;
-        }
-
-        .btn-danger:hover {
-            background: #D32F2F;
-        }
-
-        .config-status {
-            margin-top: 15px;
-            padding: 10px;
-            border-radius: 6px;
-            font-size: 0.85rem;
-            text-align: center;
-        }
-
-        .config-status.loading {
-            background: rgba(255, 193, 7, 0.2);
-            color: #FFC107;
-        }
-
-        .config-status.success {
-            background: rgba(76, 175, 80, 0.2);
-            color: #4CAF50;
-        }
-
-        .config-status.error {
-            background: rgba(244, 67, 54, 0.2);
-            color: #F44336;
-        }
-
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-            margin-top: 15px;
-        }
-
-        .metric-card {
-            background: rgba(255, 255, 255, 0.05);
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
-        }
-
-        .metric-value {
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: #4CAF50;
-        }
-
-        .metric-label {
-            font-size: 0.8rem;
-            opacity: 0.7;
-            margin-top: 5px;
-        }
-
-        .simulation-controls {
-            display: flex;
-            gap: 10px;
-            margin-top: 15px;
-        }
-
-        .simulation-info {
-            background: rgba(255, 255, 255, 0.05);
-            padding: 10px;
-            border-radius: 6px;
-            margin-top: 10px;
-            font-size: 0.85rem;
         }
 
         .file-input {
             display: none;
         }
 
-        .file-label {
-            display: inline-block;
-            padding: 10px 15px;
-            background: #FF9800;
-            color: white;
+        .file-input-button {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            background: rgba(76, 175, 80, 0.2);
+            border: 2px dashed #4CAF50;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .file-input-button:hover {
+            background: rgba(76, 175, 80, 0.3);
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
             border-radius: 6px;
             cursor: pointer;
             font-size: 0.9rem;
             transition: all 0.3s ease;
+            background: #4CAF50;
+            color: white;
         }
 
-        .file-label:hover {
-            background: #F57C00;
+        .btn:hover {
+            background: #45a049;
+        }
+
+        .btn:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        .btn-danger {
+            background: #f44336;
+        }
+
+        .btn-danger:hover {
+            background: #da190b;
+        }
+
+        .btn-secondary {
+            background: #757575;
+        }
+
+        .btn-secondary:hover {
+            background: #616161;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .metric-card {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .metric-value {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+
+        .metric-label {
+            font-size: 0.8rem;
+            opacity: 0.8;
+            margin-top: 4px;
+        }
+
+        .simulation-controls {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+
+        .simulation-info {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            margin-top: 10px;
+        }
+
+        .simulation-info div {
+            margin-bottom: 4px;
+        }
+
+        .simulation-time {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+
+        .status-bar {
+            grid-area: status;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .connection-status {
             display: flex;
-            align-items: center;
             justify-content: space-between;
-            font-size: 0.85rem;
+            align-items: center;
         }
 
         .loading-spinner {
@@ -254,24 +345,65 @@
             100% { transform: rotate(360deg); }
         }
 
-        .debug-section {
-            background: rgba(255, 152, 0, 0.1);
-            border: 1px solid rgba(255, 152, 0, 0.3);
-            padding: 10px;
+        .config-status {
+            font-size: 0.85rem;
+            padding: 8px 12px;
             border-radius: 6px;
             margin-top: 10px;
         }
 
-        .debug-section h4 {
-            color: #FF9800;
-            font-size: 0.8rem;
-            margin-bottom: 8px;
+        .config-status.success {
+            background: rgba(76, 175, 80, 0.2);
+            border: 1px solid #4CAF50;
+            color: #4CAF50;
         }
 
-        .debug-info {
-            font-size: 0.75rem;
-            opacity: 0.8;
-            font-family: monospace;
+        .config-status.error {
+            background: rgba(244, 67, 54, 0.2);
+            border: 1px solid #f44336;
+            color: #f44336;
+        }
+
+        .config-status.loading {
+            background: rgba(255, 152, 0, 0.2);
+            border: 1px solid #ff9800;
+            color: #ff9800;
+        }
+
+        /* Route and truck movement styles */
+        .route-line {
+            stroke-width: 4;
+            stroke-opacity: 0.8;
+            fill: none;
+        }
+
+        .route-active {
+            stroke: #2196F3;
+            stroke-dasharray: 8,4;
+            animation: route-dash 2s linear infinite;
+        }
+
+        .route-planned {
+            stroke: #FF9800;
+            stroke-dasharray: 12,6;
+        }
+
+        .route-completed {
+            stroke: #4CAF50;
+        }
+
+        @keyframes route-dash {
+            from { stroke-dashoffset: 0; }
+            to { stroke-dashoffset: -12; }
+        }
+
+        .truck-moving {
+            animation: truck-pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes truck-pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
         }
     </style>
 </head>
@@ -281,47 +413,36 @@
         <div class="header">
             <div class="logo">Cleanify v2-alpha</div>
             <div class="system-status">
-                <div class="status-dot" id="statusDot"></div>
-                <span id="systemStatusText">System Online</span>
+                <div class="status-dot" id="systemStatusDot"></div>
+                <span id="systemStatusText">System Ready</span>
             </div>
         </div>
 
-        <!-- Sidebar -->
+        <!-- Left Sidebar -->
         <div class="sidebar">
             <!-- Configuration Section -->
             <div class="sidebar-section">
                 <div class="section-title">Configuration</div>
-                <div class="config-controls">
-                    <label for="configFile" class="file-label">
-                        Load Config File
-                    </label>
-                    <input type="file" id="configFile" class="file-input" accept=".json,.csv" />
-                    
-                    <button class="btn btn-secondary" onclick="loadSampleConfig()">
-                        Load Sample Config
-                    </button>
-                    
-                    <button class="btn" onclick="exportConfig()" id="exportBtn" disabled>
-                        Export Config
-                    </button>
-                    
-                    <button class="btn btn-secondary" onclick="debugSystemState()">
-                        Debug System
-                    </button>
+                <div class="config-upload">
+                    <div class="file-input-wrapper">
+                        <input type="file" id="configFile" class="file-input" accept=".json,.csv">
+                        <label for="configFile" class="file-input-button">
+                            Upload Config (JSON/CSV)
+                        </label>
+                    </div>
+                    <button class="btn btn-secondary" onclick="loadSampleConfig()">Load Sample</button>
+                    <button class="btn" onclick="exportState()" id="exportBtn" disabled>Export State</button>
                 </div>
-                
-                <div id="configStatus" class="config-status" style="display: none;">
-                    Ready to load configuration
-                </div>
+                <div id="configStatus" class="config-status loading">Ready to load configuration</div>
             </div>
 
-            <!-- System Metrics -->
+            <!-- Metrics Section -->
             <div class="sidebar-section">
                 <div class="section-title">System Metrics</div>
                 <div class="metrics-grid">
                     <div class="metric-card">
                         <div class="metric-value" id="binCount">0</div>
-                        <div class="metric-label">Active Bins</div>
+                        <div class="metric-label">Bins</div>
                     </div>
                     <div class="metric-card">
                         <div class="metric-value" id="truckCount">0</div>
@@ -332,8 +453,8 @@
                         <div class="metric-label">Urgent Bins</div>
                     </div>
                     <div class="metric-card">
-                        <div class="metric-value" id="agentCount">0/0</div>
-                        <div class="metric-label">Agents</div>
+                        <div class="metric-value" id="activeRoutes">0</div>
+                        <div class="metric-label">Active Routes</div>
                     </div>
                 </div>
             </div>
@@ -343,10 +464,10 @@
                 <div class="section-title">Simulation</div>
                 <div class="simulation-controls">
                     <button class="btn" onclick="startSimulation()" id="startBtn" disabled>
-                        ▶️ Start
+                        Start
                     </button>
                     <button class="btn btn-danger" onclick="pauseSimulation()" id="pauseBtn" disabled>
-                        ⏸️ Pause
+                        Pause
                     </button>
                 </div>
                 
@@ -361,8 +482,24 @@
                 
                 <div class="simulation-info" id="simulationInfo">
                     <div><strong>Status:</strong> <span id="simStatus">Stopped</span></div>
-                    <div><strong>Time:</strong> <span id="simTime">--:--</span></div>
+                    <div><strong>Time:</strong> <span id="simTime" class="simulation-time">--:--</span></div>
                     <div><strong>Speed:</strong> <span id="simSpeed">1.0x</span></div>
+                </div>
+
+                <div style="margin-top: 15px;">
+                    <button class="btn btn-secondary" onclick="triggerRoutes()" id="routeBtn" disabled>
+                        Trigger Routes
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Sidebar - Bins Status -->
+        <div class="bins-status-sidebar">
+            <div class="bins-status-title">Bins Status</div>
+            <div id="binsStatusContainer">
+                <div style="text-align: center; padding: 20px; opacity: 0.6;">
+                    No bins loaded
                 </div>
             </div>
         </div>
@@ -383,14 +520,6 @@
                     <span id="lastUpdate">Last update: Never</span>
                 </div>
             </div>
-            
-            <!-- Debug Section -->
-            <div class="debug-section" id="debugSection" style="display: none;">
-                <h4>Debug Information</h4>
-                <div class="debug-info" id="debugInfo">
-                    No debug data available
-                </div>
-            </div>
         </div>
     </div>
 
@@ -404,6 +533,7 @@
             trucks: new Map(),
             depot: null
         };
+        let routes = new Map();
         let systemState = null;
         let currentConfig = null;
         let updateInterval = null;
@@ -444,39 +574,430 @@
             });
         }
 
-        // API Communication
-        async function apiCall(endpoint, method = 'GET', data = null) {
+        // Time formatting
+        function formatSimulationTime(timeString) {
+            if (!timeString || timeString === 'undefined' || timeString === 'null') {
+                return '--:--';
+            }
+            
             try {
-                const options = {
-                    method,
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json'
-                    }
-                };
-
-                if (data && method !== 'GET') {
-                    options.body = JSON.stringify(data);
+                const date = new Date(timeString);
+                if (isNaN(date.getTime())) {
+                    return '--:--';
                 }
-
-                console.log(`🌐 API Call: ${method} ${API_BASE}${endpoint}`);
-                if (data) console.log('📤 Request data:', data);
-
-                const response = await fetch(`${API_BASE}${endpoint}`, options);
                 
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`HTTP ${response.status}: ${errorText}`);
-                }
+                return date.toLocaleTimeString('en-US', {
+                    hour12: false,
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+            } catch (e) {
+                return '--:--';
+            }
+        }
 
-                const result = await response.json();
-                console.log('📥 Response:', result);
-                return result;
+        function getCurrentHour(timeString) {
+            try {
+                const date = new Date(timeString);
+                return date.getHours();
+            } catch (e) {
+                return 8; // Default to 8 AM
+            }
+        }
+
+        // Enhanced bins status with hourly rates
+        function updateBinsStatusSidebar() {
+            const container = document.getElementById('binsStatusContainer');
+            
+            if (!systemState || !systemState.bins || systemState.bins.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align: center; padding: 20px; opacity: 0.6;">
+                        No bins loaded
+                    </div>
+                `;
+                return;
+            }
+
+            const currentHour = getCurrentHour(systemState.current_time);
+            let html = '';
+            
+            systemState.bins.forEach(bin => {
+                const fillLevel = bin.fill_level || 0;
+                const fillPercentage = Math.min(fillLevel, 100);
+                const baseFillRate = bin.fill_rate_lph || 3.0;
+                
+                // Calculate hourly fill rate based on current simulation time
+                let hourlyMultiplier = 1.0;
+                let rateCategory = 'rate-low';
+                
+                if (6 <= currentHour <= 10) {
+                    hourlyMultiplier = 1.8;
+                    rateCategory = 'rate-high';
+                } else if (17 <= currentHour <= 21) {
+                    hourlyMultiplier = 1.5;
+                    rateCategory = 'rate-medium';
+                } else if (22 <= currentHour || currentHour <= 5) {
+                    hourlyMultiplier = 0.3;
+                    rateCategory = 'rate-low';
+                }
+                
+                const currentHourlyRate = (baseFillRate * hourlyMultiplier).toFixed(1);
+                const capacityLiters = bin.capacity_l || 100;
+                const currentFillLiters = (capacityLiters * fillLevel / 100).toFixed(1);
+                
+                // Time to full calculation
+                const remainingCapacity = capacityLiters - parseFloat(currentFillLiters);
+                const timeToFull = remainingCapacity > 0 ? (remainingCapacity / parseFloat(currentHourlyRate)).toFixed(1) : 0;
+
+                html += `
+                    <div class="bin-status-item">
+                        <div class="bin-status-header">
+                            <div class="bin-id">${bin.id}</div>
+                            <div class="bin-fill-percentage">${fillLevel.toFixed(1)}%</div>
+                        </div>
+                        <div class="bin-fill-bar">
+                            <div class="bin-fill-level" style="width: ${fillPercentage}%"></div>
+                            <div class="bin-overflow-area"></div>
+                            <div class="bin-fill-text">${fillLevel.toFixed(0)}%</div>
+                        </div>
+                        <div class="bin-details">
+                            <div class="bin-detail-row">
+                                <span>Capacity:</span>
+                                <span>${capacityLiters}L</span>
+                            </div>
+                            <div class="bin-detail-row">
+                                <span>Current Fill:</span>
+                                <span>${currentFillLiters}L</span>
+                            </div>
+                            <div class="bin-detail-row">
+                                <span>Hour ${currentHour} Rate:</span>
+                                <span>${currentHourlyRate}L/h <div class="hourly-rate-indicator ${rateCategory}"></div></span>
+                            </div>
+                            <div class="bin-detail-row">
+                                <span>Time to Full:</span>
+                                <span>${timeToFull}h</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            container.innerHTML = html;
+        }
+
+        // Enhanced route visualization with movement
+        function updateRoutes() {
+            if (!systemState || !systemState.active_routes) return;
+
+            // Clear existing routes
+            routes.forEach(route => map.removeLayer(route));
+            routes.clear();
+
+            // Add active routes with movement animation
+            systemState.active_routes.forEach(route => {
+                if (route.waypoints && route.waypoints.length > 1) {
+                    const latlngs = route.waypoints.map(wp => [wp.lat, wp.lon]);
+                    
+                    const polyline = L.polyline(latlngs, {
+                        className: `route-line route-${route.status}`,
+                        color: getRouteColor(route.status),
+                        weight: 4,
+                        opacity: 0.8
+                    }).addTo(map);
+
+                    polyline.bindPopup(`
+                        <b>Route:</b> ${route.id}<br>
+                        <b>Truck:</b> ${route.truck_id}<br>
+                        <b>Status:</b> ${route.status}<br>
+                        <b>Bins:</b> ${route.bin_ids ? route.bin_ids.length : 0}<br>
+                        <b>Duration:</b> ${route.estimated_duration || 'N/A'}min
+                    `);
+
+                    routes.set(route.id, polyline);
+                }
+            });
+        }
+
+        function getRouteColor(status) {
+            switch(status) {
+                case 'active': return '#2196F3';
+                case 'completed': return '#4CAF50';
+                case 'planned': return '#FF9800';
+                default: return '#757575';
+            }
+        }
+
+        // Enhanced truck movement visualization
+        function updateMap() {
+            if (!systemState) return;
+
+            // Clear existing markers
+            clearMarkers();
+
+            // Add depot marker
+            if (currentConfig && currentConfig.depot) {
+                markers.depot = L.circleMarker([currentConfig.depot.latitude, currentConfig.depot.longitude], {
+                    radius: 12,
+                    fillColor: '#FF5722',
+                    color: '#fff',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }).addTo(map).bindPopup(`<b>Depot:</b> ${currentConfig.depot.name}`);
+            }
+
+            // Add bin markers
+            if (systemState.bins && Array.isArray(systemState.bins)) {
+                systemState.bins.forEach((bin) => {
+                    if (bin.lat && bin.lon && !isNaN(bin.lat) && !isNaN(bin.lon)) {
+                        const fillLevel = bin.fill_level || 0;
+                        const color = getFillLevelColor(fillLevel);
+                        
+                        const marker = L.circleMarker([bin.lat, bin.lon], {
+                            radius: Math.max(6, 6 + (fillLevel / 100) * 4),
+                            fillColor: color,
+                            color: '#fff',
+                            weight: 2,
+                            opacity: 1,
+                            fillOpacity: 0.8
+                        }).addTo(map);
+
+                        const popupContent = `
+                            <b>Bin:</b> ${bin.id}<br>
+                            <b>Fill Level:</b> ${fillLevel.toFixed(1)}%<br>
+                            <b>Capacity:</b> ${bin.capacity_l}L<br>
+                            <b>Current Rate:</b> ${bin.current_hourly_rate || bin.fill_rate_lph}L/h<br>
+                            <b>Status:</b> ${fillLevel >= 95 ? 'Critical' : fillLevel >= 85 ? 'Urgent' : 'Normal'}
+                        `;
+                        marker.bindPopup(popupContent);
+                        
+                        markers.bins.set(bin.id, marker);
+                    }
+                });
+            }
+
+            // Add truck markers with movement animation
+            if (systemState.trucks && Array.isArray(systemState.trucks)) {
+                systemState.trucks.forEach((truck) => {
+                    if (truck.lat && truck.lon && !isNaN(truck.lat) && !isNaN(truck.lon)) {
+                        const isMoving = truck.status === 'EN_ROUTE' || truck.status === 'COLLECTING';
+                        
+                        const marker = L.circleMarker([truck.lat, truck.lon], {
+                            radius: 10,
+                            fillColor: getTruckColor(truck.status),
+                            color: '#fff',
+                            weight: 2,
+                            opacity: 1,
+                            fillOpacity: 0.8,
+                            className: isMoving ? 'truck-moving' : ''
+                        }).addTo(map);
+
+                        const popupContent = `
+                            <b>Truck:</b> ${truck.name || truck.id}<br>
+                            <b>Status:</b> ${truck.status}<br>
+                            <b>Load:</b> ${truck.current_load_l || 0}/${truck.capacity_l}L<br>
+                            <b>Utilization:</b> ${(((truck.current_load_l || 0) / (truck.capacity_l || 1)) * 100).toFixed(1)}%<br>
+                            <b>Route:</b> ${truck.current_route_id || 'None'}
+                        `;
+                        marker.bindPopup(popupContent);
+                        
+                        markers.trucks.set(truck.id, marker);
+                    }
+                });
+            }
+        }
+
+        function getTruckColor(status) {
+            switch(status) {
+                case 'IDLE': return '#4CAF50';
+                case 'EN_ROUTE': return '#2196F3';
+                case 'COLLECTING': return '#FF9800';
+                case 'RETURNING': return '#9C27B0';
+                default: return '#757575';
+            }
+        }
+
+        function clearMarkers() {
+            markers.bins.forEach(marker => map.removeLayer(marker));
+            markers.trucks.forEach(marker => map.removeLayer(marker));
+            if (markers.depot) map.removeLayer(markers.depot);
+            
+            markers.bins.clear();
+            markers.trucks.clear();
+            markers.depot = null;
+        }
+
+        function getFillLevelColor(fillLevel) {
+            if (fillLevel >= 95) return '#F44336';
+            if (fillLevel >= 85) return '#FF9800';
+            if (fillLevel >= 50) return '#FFC107';
+            return '#4CAF50';
+        }
+        // Frontend - add to updateRoutes()
+        function drawCorridorArea(route) {
+            if (!route.waypoints) return;
+            
+            // Create 250m buffer around route
+            const corridorRadius = 250; // meters
+            const corridorPolygon = [];
+            
+            for (let i = 0; i < route.waypoints.length - 1; i++) {
+                // Create buffer points around each segment
+                // Simplified version - draw circles around waypoints
+                const circle = L.circle([route.waypoints[i].lat, route.waypoints[i].lon], {
+                    radius: corridorRadius,
+                    fillColor: 'yellow',
+                    fillOpacity: 0.2,
+                    color: 'orange',
+                    weight: 1
+                }).addTo(map);
+                
+                corridorAreas.set(`corridor_${route.id}_${i}`, circle);
+            }
+        }
+        // Enhanced system state update with faster refresh
+        async function updateSystemState() {
+            if (isUpdating) return;
+            isUpdating = true;
+
+            try {
+                const response = await fetch(`${API_BASE}/system-state`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                systemState = await response.json();
+                console.log('=== DEBUG ===');
+                console.log('Urgent bins:', systemState.bins?.filter(b => b.fill_level >= 85).map(b => `${b.id}:${b.fill_level.toFixed(1)}%`));
+                console.log('Idle trucks:', systemState.trucks?.filter(t => t.status === 'IDLE').map(t => `${t.id}:${t.status}`));
+                console.log('Active routes:', systemState.active_routes?.length || 0);
+                console.log('Simulation running:', systemState.simulation_running);
+                console.log('All truck statuses:', systemState.trucks?.map(t => `${t.id}:${t.status}`));
+                updateMetrics();
+                updateSimulationInfo();
+                updateMap();
+                updateRoutes();
+                updateBinsStatusSidebar();
+                
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                document.getElementById('connectionIndicator').style.display = 'none';
+                document.getElementById('lastUpdate').textContent = `Last update: ${new Date().toLocaleTimeString()}`;
 
             } catch (error) {
-                console.error(`❌ API Error (${endpoint}):`, error);
-                throw error;
+                document.getElementById('connectionStatus').textContent = 'Connection error';
+                document.getElementById('connectionIndicator').style.display = 'block';
+            } finally {
+                isUpdating = false;
             }
+        }
+
+        function updateMetrics() {
+            if (!systemState) return;
+
+            const binCount = systemState.bins ? systemState.bins.length : 0;
+            const truckCount = systemState.trucks ? systemState.trucks.length : 0;
+            const urgentBins = systemState.bins ? systemState.bins.filter(bin => bin.fill_level >= 85).length : 0;
+            const activeRoutes = systemState.active_routes ? systemState.active_routes.length : 0;
+
+            document.getElementById('binCount').textContent = binCount;
+            document.getElementById('truckCount').textContent = truckCount;
+            document.getElementById('urgentBins').textContent = urgentBins;
+            document.getElementById('activeRoutes').textContent = activeRoutes;
+        }
+
+        function updateSimulationInfo() {
+            if (!systemState) return;
+
+            const isRunning = systemState.simulation_running || false;
+            const currentTime = systemState.current_time;
+            const speed = systemState.simulation_speed || 1.0;
+
+            document.getElementById('speedSlider').value = speed;
+            document.getElementById('speedValue').textContent = speed + 'x';
+            document.getElementById('simSpeed').textContent = speed + 'x';
+
+            const timeDisplay = formatSimulationTime(currentTime);
+            document.getElementById('simTime').textContent = timeDisplay;
+            document.getElementById('simStatus').textContent = isRunning ? 'Running' : 'Stopped';
+
+            document.getElementById('routeBtn').disabled = !systemState.bins || systemState.bins.length === 0;
+        }
+
+        // Simulation Controls
+        async function startSimulation() {
+            try {
+                showConfigStatus('Starting simulation...', 'loading');
+                const result = await apiCall('/simulation/start', 'POST');
+                
+                if (result && result.status === 'simulation_started') {
+                    showConfigStatus('Simulation started', 'success');
+                    document.getElementById('startBtn').disabled = true;
+                    document.getElementById('pauseBtn').disabled = false;
+                    document.getElementById('simStatus').textContent = 'Running';
+                } else {
+                    throw new Error('Invalid simulation start response');
+                }
+            } catch (error) {
+                showConfigError('Failed to start simulation: ' + error.message);
+            }
+        }
+
+        async function pauseSimulation() {
+            try {
+                showConfigStatus('Pausing simulation...', 'loading');
+                const result = await apiCall('/simulation/pause', 'POST');
+                
+                if (result && result.status === 'simulation_paused') {
+                    showConfigStatus('Simulation paused', 'loading');
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('pauseBtn').disabled = true;
+                    document.getElementById('simStatus').textContent = 'Stopped';
+                } else {
+                    throw new Error('Invalid simulation pause response');
+                }
+            } catch (error) {
+                showConfigError('Failed to pause simulation: ' + error.message);
+            }
+        }
+
+        async function setSimulationSpeed(speed) {
+            try {
+                await apiCall('/simulation/speed', 'POST', { speed });
+            } catch (error) {
+                console.error('Set speed error:', error);
+            }
+        }
+
+        async function triggerRoutes() {
+            try {
+                showConfigStatus('Triggering route planning...', 'loading');
+                const result = await apiCall('/routes/trigger', 'POST');
+                
+                if (result && result.status === 'success') {
+                    showConfigStatus(`Routes created: ${result.routes_created}`, 'success');
+                } else {
+                    showConfigStatus(`${result.message}`, 'loading');
+                }
+            } catch (error) {
+                showConfigError('Failed to trigger routes: ' + error.message);
+            }
+        }
+
+        // API Helper
+        async function apiCall(endpoint, method = 'GET', data = null) {
+            const url = `${API_BASE}${endpoint}`;
+            const options = {
+                method,
+                headers: { 'Content-Type': 'application/json' },
+                body: data ? JSON.stringify(data) : null
+            };
+
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
         }
 
         // Configuration Management
@@ -485,22 +1006,21 @@
             if (!file) return;
 
             try {
-                showConfigStatus('Reading file...', 'loading');
-                const text = await file.text();
-                
+                showConfigStatus('Processing file...', 'loading');
+                const fileContent = await file.text();
                 let config;
+
                 if (file.name.endsWith('.json')) {
-                    config = JSON.parse(text);
+                    config = JSON.parse(fileContent);
                 } else if (file.name.endsWith('.csv')) {
-                    config = await parseCSVConfig(text);
+                    config = await parseCSVConfig(fileContent);
                 } else {
-                    throw new Error('Unsupported file format. Use JSON or CSV.');
+                    throw new Error('Unsupported file type. Use JSON or CSV.');
                 }
 
                 await processAndUploadConfig(config);
 
             } catch (error) {
-                console.error('❌ File processing error:', error);
                 showConfigError('File processing error: ' + error.message);
             }
         }
@@ -554,19 +1074,19 @@
                         },
                         {
                             id: "BIN_004",
-                            latitude: 33.6824,
-                            longitude: 73.0449,
-                            capacity_l: 80,
-                            fill_level: 32.1,
-                            fill_rate_lph: 1.9
+                            latitude: 33.6804,
+                            longitude: 73.0459,
+                            capacity_l: 120,
+                            fill_level: 92.3,
+                            fill_rate_lph: 5.5
                         },
                         {
                             id: "BIN_005",
-                            latitude: 33.6864,
-                            longitude: 73.0519,
-                            capacity_l: 200,
+                            latitude: 33.6884,
+                            longitude: 73.0509,
+                            capacity_l: 100,
                             fill_level: 67.8,
-                            fill_rate_lph: 8.3
+                            fill_rate_lph: 3.9
                         }
                     ]
                 };
@@ -574,34 +1094,18 @@
                 await processAndUploadConfig(sampleConfig);
 
             } catch (error) {
-                console.error('❌ Sample config error:', error);
-                showConfigError('Failed to load sample configuration: ' + error.message);
+                showConfigError('Failed to load sample config: ' + error.message);
             }
         }
 
         async function processAndUploadConfig(config) {
-            try {
-                showConfigStatus('Validating configuration...', 'loading');
-                
-                const validatedConfig = validateConfig(config);
-                console.log('✅ Config validation passed:', validatedConfig);
-                
-                currentConfig = validatedConfig;
-                await uploadConfigToBackend(validatedConfig);
-
-            } catch (error) {
-                console.error('❌ Config processing error:', error);
-                showConfigError('Config processing error: ' + error.message);
-            }
+            currentConfig = validateAndFixConfig(config);
+            await uploadConfigToBackend(currentConfig);
         }
 
-        function validateConfig(config) {
-            if (!config || typeof config !== 'object') {
-                throw new Error('Invalid config: must be an object');
-            }
-
+        function validateAndFixConfig(config) {
             if (!config.depot || !config.depot.latitude || !config.depot.longitude) {
-                throw new Error('Invalid depot: missing coordinates');
+                throw new Error('Invalid depot: must have latitude and longitude');
             }
 
             if (!Array.isArray(config.trucks) || config.trucks.length === 0) {
@@ -612,15 +1116,12 @@
                 throw new Error('Invalid bins: must be non-empty array');
             }
 
-            // Validate bins
             config.bins.forEach((bin, i) => {
                 if (!bin.id || bin.latitude === undefined || bin.longitude === undefined) {
                     throw new Error(`Invalid bin ${i}: missing required fields`);
                 }
                 
-                if (!bin.capacity_l) {
-                    bin.capacity_l = 100;
-                }
+                if (!bin.capacity_l) bin.capacity_l = 100;
                 if (bin.fill_level === undefined) bin.fill_level = 50.0;
                 if (bin.fill_rate_lph === undefined) bin.fill_rate_lph = 3.0;
             });
@@ -632,13 +1133,10 @@
             try {
                 showConfigStatus('Uploading configuration...', 'loading');
                 
-                console.log('📤 Uploading config to backend:', config);
-                
                 const result = await apiCall('/load-config', 'POST', config);
                 
                 if (result && result.status === 'success') {
-                    console.log('✅ Config upload successful:', result);
-                    showConfigStatus(`✅ Config uploaded: ${result.trucks} trucks, ${result.bins} bins`, 'success');
+                    showConfigStatus(`Config uploaded: ${result.trucks} trucks, ${result.bins} bins`, 'success');
                     
                     document.getElementById('startBtn').disabled = false;
                     document.getElementById('exportBtn').disabled = false;
@@ -649,384 +1147,57 @@
                     }
                     
                     setTimeout(async () => {
-                        console.log('🔍 Checking system state after config upload...');
                         await updateSystemState();
-                        await debugSystemState();
                     }, 1000);
                     
                 } else {
-                    throw new Error('Backend rejected configuration: ' + JSON.stringify(result));
+                    throw new Error('Backend rejected configuration');
                 }
             } catch (error) {
-                console.error('❌ Config upload error:', error);
-                showConfigError('Failed to upload configuration: ' + error.message);
+                showConfigError('Config upload failed: ' + error.message);
             }
         }
 
-        function exportConfig() {
-            if (currentConfig) {
-                try {
-                    const config = {
-                        exported_at: new Date().toISOString(),
-                        ...currentConfig
-                    };
-                    
-                    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'cleanify_config.json';
-                    a.click();
-                    URL.revokeObjectURL(url);
-                    
-                    showConfigStatus('✅ Configuration exported', 'success');
-                } catch (error) {
-                    console.error('Export error:', error);
-                    showConfigError('Failed to export configuration');
-                }
+        async function exportState() {
+            if (!systemState) {
+                showConfigError('No system state to export');
+                return;
             }
-        }
-
-        // Update Functions
-        async function updateSystemState() {
-            if (isUpdating) return;
-            isUpdating = true;
 
             try {
-                const state = await apiCall('/system-state');
-                if (state) {
-                    systemState = state;
-                    updateMap();
-                    updateMetrics();
-                    updateSimulationInfo();
-                    updateConnectionStatus('System Online');
-                    document.getElementById('lastUpdate').textContent = 'Last update: ' + new Date().toLocaleTimeString();
-                } else {
-                    updateConnectionStatus('API Unavailable', true);
-                }
-            } catch (error) {
-                console.error('Update system state error:', error);
-                updateConnectionStatus('Update Error', true);
-            } finally {
-                isUpdating = false;
-            }
-        }
+                const exportData = {
+                    config: currentConfig,
+                    state: systemState,
+                    timestamp: new Date().toISOString()
+                };
 
-        function updateMap() {
-            if (!systemState) return;
-
-            console.log('🗺️ Updating map with system state:', systemState);
-
-            // Clear existing markers
-            clearMarkers();
-
-            // Add depot marker
-            if (currentConfig && currentConfig.depot) {
-                markers.depot = L.circleMarker([currentConfig.depot.latitude, currentConfig.depot.longitude], {
-                    radius: 12,
-                    fillColor: '#FF5722',
-                    color: '#fff',
-                    weight: 2,
-                    opacity: 1,
-                    fillOpacity: 0.8
-                }).addTo(map).bindPopup(`<b>Depot:</b> ${currentConfig.depot.name}`);
-            }
-
-            // Add bin markers
-            if (systemState.bins && Array.isArray(systemState.bins)) {
-                console.log(`📍 Adding ${systemState.bins.length} bin markers`);
-                
-                systemState.bins.forEach((bin, index) => {
-                    console.log(`Processing bin ${index + 1}:`, bin);
-                    
-                    if (bin.lat && bin.lon && !isNaN(bin.lat) && !isNaN(bin.lon)) {
-                        const fillLevel = bin.fill_level || 0;
-                        const color = getFillLevelColor(fillLevel);
-                        
-                        const marker = L.circleMarker([bin.lat, bin.lon], {
-                            radius: Math.max(6, 6 + (fillLevel / 100) * 4),
-                            fillColor: color,
-                            color: '#fff',
-                            weight: 2,
-                            opacity: 1,
-                            fillOpacity: 0.8
-                        }).addTo(map);
-
-                        const popupContent = `
-                            <b>Bin:</b> ${bin.id}<br>
-                            <b>Fill Level:</b> ${fillLevel.toFixed(1)}%<br>
-                            <b>Capacity:</b> ${bin.capacity_l}L<br>
-                            <b>Rate:</b> ${bin.fill_rate_lph}L/h<br>
-                            <b>Status:</b> ${fillLevel >= 95 ? 'Critical' : fillLevel >= 85 ? 'Urgent' : 'Normal'}
-                        `;
-                        marker.bindPopup(popupContent);
-                        
-                        markers.bins.set(bin.id, marker);
-                        console.log(`✅ Added bin marker for ${bin.id} at [${bin.lat}, ${bin.lon}] - ${fillLevel.toFixed(1)}%`);
-                    } else {
-                        console.warn(`❌ Bin ${bin.id} has invalid coordinates:`, { lat: bin.lat, lon: bin.lon });
-                    }
+                const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+                    type: 'application/json'
                 });
                 
-                console.log(`✅ Successfully added ${markers.bins.size} bin markers to map`);
-            } else {
-                console.log('⚠️ No bins in system state or bins is not an array');
-            }
-
-            // Add truck markers
-            if (systemState.trucks && Array.isArray(systemState.trucks)) {
-                console.log(`🚛 Adding ${systemState.trucks.length} truck markers`);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `cleanify-state-${new Date().toISOString().slice(0, 19)}.json`;
+                a.click();
                 
-                systemState.trucks.forEach((truck, index) => {
-                    if (truck.lat && truck.lon && !isNaN(truck.lat) && !isNaN(truck.lon)) {
-                        const marker = L.circleMarker([truck.lat, truck.lon], {
-                            radius: 10,
-                            fillColor: '#2196F3',
-                            color: '#fff',
-                            weight: 2,
-                            opacity: 1,
-                            fillOpacity: 0.8
-                        }).addTo(map);
-
-                        const popupContent = `
-                            <b>Truck:</b> ${truck.name || truck.id}<br>
-                            <b>Status:</b> ${truck.status}<br>
-                            <b>Load:</b> ${truck.current_load_l}/${truck.capacity_l}L<br>
-                            <b>Utilization:</b> ${(((truck.current_load_l || 0) / (truck.capacity_l || 1)) * 100).toFixed(1)}%
-                        `;
-                        marker.bindPopup(popupContent);
-                        
-                        markers.trucks.set(truck.id, marker);
-                        console.log(`✅ Added truck marker for ${truck.id}`);
-                    }
-                });
-            }
-        }
-
-        function updateMetrics() {
-            if (!systemState) return;
-
-            const binCount = systemState.bins ? systemState.bins.length : 0;
-            const truckCount = systemState.trucks ? systemState.trucks.length : 0;
-            const urgentBins = systemState.bins ? systemState.bins.filter(bin => bin.fill_level >= 85).length : 0;
-
-            document.getElementById('binCount').textContent = binCount;
-            document.getElementById('truckCount').textContent = truckCount;
-            document.getElementById('urgentBins').textContent = urgentBins;
-        }
-
-        function updateSimulationInfo() {
-            if (!systemState) return;
-
-            const isRunning = systemState.simulation_running || false;
-            const currentTime = systemState.current_time;
-            const speed = systemState.simulation_speed || 1.0;
-
-            // Sync speed slider with backend
-            document.getElementById('speedSlider').value = speed;
-            document.getElementById('speedValue').textContent = speed + 'x';
-            document.getElementById('simSpeed').textContent = speed + 'x';
-
-            // Fix time display
-            let timeDisplay = '--:--';
-            if (currentTime && currentTime !== 'undefined') {
-                try {
-                    const timeObj = new Date(currentTime);
-                    timeDisplay = timeObj.toLocaleTimeString('en-US', {
-                        hour12: false,
-                        hour: '2-digit', 
-                        minute: '2-digit'
-                    });
-                } catch (e) {
-                    timeDisplay = '--:--';
-                }
-            }
-            
-            document.getElementById('simTime').textContent = timeDisplay;
-            document.getElementById('simStatus').textContent = isRunning ? 'Running' : 'Stopped';
-        }
-
-        function clearMarkers() {
-            markers.bins.forEach(marker => map.removeLayer(marker));
-            markers.trucks.forEach(marker => map.removeLayer(marker));
-            if (markers.depot) map.removeLayer(markers.depot);
-            
-            markers.bins.clear();
-            markers.trucks.clear();
-            markers.depot = null;
-        }
-
-        function getFillLevelColor(fillLevel) {
-            if (fillLevel >= 95) return '#F44336';      // Red - Critical
-            if (fillLevel >= 85) return '#FF9800';      // Orange - High  
-            if (fillLevel >= 50) return '#FFC107';      // Yellow - Medium
-            return '#4CAF50';                           // Green - Low
-        }
-
-        // Simulation Controls
-        async function startSimulation() {
-            try {
-                showConfigStatus('Starting simulation...', 'loading');
-                const result = await apiCall('/simulation/start', 'POST');
-                
-                if (result && result.status === 'simulation_started') {
-                    showConfigStatus('Simulation started', 'success');
-                    document.getElementById('startBtn').disabled = true;
-                    document.getElementById('pauseBtn').disabled = false;
-                    document.getElementById('simStatus').textContent = 'Running';
-                } else {
-                    throw new Error('Invalid simulation start response');
-                }
+                URL.revokeObjectURL(url);
+                showConfigStatus('State exported successfully', 'success');
             } catch (error) {
-                console.error('Start simulation error:', error);
-                showConfigError('Failed to start simulation: ' + error.message);
+                showConfigError('Export failed: ' + error.message);
             }
         }
 
-        async function pauseSimulation() {
-            try {
-                showConfigStatus('Pausing simulation...', 'loading');
-                const result = await apiCall('/simulation/pause', 'POST');
-                
-                if (result && result.status === 'simulation_paused') {
-                    showConfigStatus('⏸️ Simulation paused', 'loading');
-                    document.getElementById('startBtn').disabled = false;
-                    document.getElementById('pauseBtn').disabled = true;
-                    document.getElementById('simStatus').textContent = 'Stopped';
-                } else {
-                    throw new Error('Invalid simulation pause response');
-                }
-            } catch (error) {
-                console.error('Pause simulation error:', error);
-                showConfigError('Failed to pause simulation: ' + error.message);
-            }
-        }
-
-        async function setSimulationSpeed(speed) {
-            try {
-                await apiCall('/simulation/speed', 'POST', { speed });
-            } catch (error) {
-                console.error('Set speed error:', error);
-            }
-        }
-
-        async function triggerRoutes() {
-            try {
-                showConfigStatus('Triggering route planning...', 'loading');
-                const result = await apiCall('/routes/trigger', 'POST');
-                
-                if (result && result.status === 'success') {
-                    showConfigStatus(`✅ Routes created: ${result.routes_created}`, 'success');
-                } else {
-                    showConfigStatus(`⚠️ ${result.message}`, 'loading');
-                }
-            } catch (error) {
-                console.error('Route trigger error:', error);
-                showConfigError('Failed to trigger routes: ' + error.message);
-            }
-        }
-
-        async function getRouteStatus() {
-            try {
-                const status = await apiCall('/routes/status');
-                console.log('📊 Route Status:', status);
-                
-                // Update debug section with route info
-                const debugSection = document.getElementById('debugSection');
-                const debugInfo = document.getElementById('debugInfo');
-                
-                if (status) {
-                    debugSection.style.display = 'block';
-                    debugInfo.innerHTML = `
-                        <strong>Trucks:</strong> ${status.trucks.active}/${status.trucks.total} active (${status.trucks.utilization.toFixed(1)}%)<br>
-                        <strong>Bins:</strong> ${status.bins.critical} critical, ${status.bins.urgent} urgent, ${status.bins.being_collected} collecting<br>
-                        <strong>Routes:</strong> ${status.system.routes_planned} planned, ${status.system.emergencies_handled} emergencies
-                    `;
-                }
-                
-                return status;
-            } catch (error) {
-                console.error('Route status error:', error);
-                return null;
-            }
-        }
-
-        async function resetSimulation() {
-            try {
-                showConfigStatus('Resetting simulation...', 'loading');
-                const result = await apiCall('/simulation/reset', 'POST');
-                
-                if (result && result.status === 'success') {
-                    showConfigStatus('✅ Simulation reset', 'success');
-                    await updateSystemState();
-                }
-            } catch (error) {
-                console.error('Reset error:', error);
-                showConfigError('Failed to reset simulation');
-            }
-        }
-
-
-        // Debug Functions
-        async function debugSystemState() {
-            try {
-                const debugInfo = await apiCall('/debug/system-state');
-                console.log('🐛 Debug info:', debugInfo);
-                
-                const debugSection = document.getElementById('debugSection');
-                const debugInfoDiv = document.getElementById('debugInfo');
-                
-                if (debugInfo) {
-                    debugSection.style.display = 'block';
-                    debugInfoDiv.innerHTML = `
-                        System State Exists: ${debugInfo.system_state_exists}<br>
-                        Bins Count: ${debugInfo.bins_count}<br>
-                        Trucks Count: ${debugInfo.trucks_count}<br>
-                        Simulation Running: ${debugInfo.simulation_running}<br>
-                        Current Time: ${debugInfo.simulation_current_time || 'N/A'}
-                    `;
-                } else {
-                    debugSection.style.display = 'none';
-                }
-                
-                return debugInfo;
-            } catch (error) {
-                console.error('Debug error:', error);
-                return null;
-            }
-        }
-
-        // UI Helper Functions
         function showConfigStatus(message, type) {
-            const statusDiv = document.getElementById('configStatus');
-            statusDiv.textContent = message;
-            statusDiv.className = `config-status ${type}`;
-            statusDiv.style.display = 'block';
+            const statusElement = document.getElementById('configStatus');
+            statusElement.textContent = message;
+            statusElement.className = `config-status ${type}`;
         }
 
         function showConfigError(message) {
-            showConfigStatus('❌ ' + message, 'error');
+            showConfigStatus(`Error: ${message}`, 'error');
         }
 
-        function updateConnectionStatus(status, isError = false) {
-            const indicator = document.getElementById('connectionIndicator');
-            const statusText = document.getElementById('connectionStatus');
-            const statusDot = document.getElementById('statusDot');
-            
-            if (isError) {
-                indicator.className = 'status-dot';
-                indicator.style.background = '#F44336';
-                statusDot.style.background = '#F44336';
-                statusText.textContent = status;
-            } else {
-                indicator.className = 'status-dot';
-                indicator.style.background = '#4CAF50';
-                statusDot.style.background = '#4CAF50';
-                statusText.textContent = status;
-            }
-        }
-
-        // CSV Parsing Helper
         async function parseCSVConfig(csvText) {
             const lines = csvText.trim().split('\n');
             const headers = lines[0].split(',').map(h => h.trim());
@@ -1060,18 +1231,17 @@
             };
         }
 
-        // Main Update Loop
+        // Enhanced update loop with faster refresh for smooth simulation
         function startUpdateLoop() {
             updateInterval = setInterval(async () => {
                 await updateSystemState();
-            }, 3000);
+            }, 1500); // Faster updates for smoother simulation
 
             setTimeout(async () => {
                 await updateSystemState();
             }, 1000);
         }
 
-        // Cleanup on page unload
         window.addEventListener('beforeunload', () => {
             if (updateInterval) {
                 clearInterval(updateInterval);

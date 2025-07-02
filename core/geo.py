@@ -19,7 +19,7 @@ def get_tile_id(lat: float, lon: float, res: int = 9) -> str:
     Get H3 tile ID for coordinates
     Default res=9 gives ~500m hex cells
     """
-    return h3.geo_to_h3(lat, lon, res)
+    return h3.latlng_to_cell(lat, lon, res)
 
 
 def get_tile_bounds(tile_id: str) -> List[Tuple[float, float]]:
