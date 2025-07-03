@@ -96,8 +96,8 @@ class Bin:
         return remaining_capacity / fill_rate_per_minute
 
     def is_urgent(self) -> bool:
-        """Check if bin needs immediate collection"""
-        return self.fill_level >= self.threshold
+        """Check if bin needs urgent collection"""
+        return self.fill_level >= 85.0
 
 
 @dataclass
@@ -134,9 +134,10 @@ class Truck:
         bin_waste = bin_obj.capacity_l * (bin_obj.fill_level / 100.0)
         return self.available_capacity() >= bin_waste
 
+    # Add to Truck class if missing:  
     def is_available(self) -> bool:
         """Check if truck is available for new routes"""
-        return self.status == TruckStatus.IDLE
+        return str(self.status).upper() == 'IDLE'
 
 
 @dataclass
