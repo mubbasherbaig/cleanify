@@ -315,43 +315,44 @@ def get_current_system_state(self):
 async def get_system_state():
     """Get current system state - FIXED VERSION"""
     
-    if not supervisor:
+    if not supervisor or not supervisor.system_state:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supervisor not available"
-        )
-    
-    # Get state directly from supervisor
-    state_dict = supervisor.get_current_system_state()
-    
-    if not state_dict:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="System state not initialized"
+            detail="System not initialized"
         )
     
     try:
-        print(f"🔍 API: Returning system state with time: {state_dict.get('current_time')}")
+        state = supervisor.system_state
         
-        # CRITICAL: Ensure current_time is included in response
+        # Convert bins to dict format
+        bins_data = [supervisor._bin_to_dict(bin_obj) for bin_obj in state.bins]
+        
+        # Convert trucks to dict format
+        trucks_data = [supervisor._truck_to_dict(truck) for truck in state.trucks]
+        
+        # Convert routes to dict format
+        routes_data = [supervisor._route_to_dict(route) for route in state.active_routes]
+        
+        # Ensure current_time is included
+        current_time = supervisor.simulation_current_time or datetime.now()
+        
         return SystemStateResponse(
-            timestamp=state_dict["timestamp"],
-            simulation_running=state_dict["simulation_running"],
-            simulation_speed=state_dict["simulation_speed"],
-            current_time=state_dict["current_time"],  # CRITICAL: Include current_time
-            bins=state_dict["bins"],
-            trucks=state_dict["trucks"], 
-            active_routes=state_dict["active_routes"],
-            traffic_conditions=[]  # Can be empty for now
+            timestamp=state.timestamp.isoformat(),
+            simulation_running=supervisor.simulation_running,
+            simulation_speed=supervisor.simulation_speed,
+            current_time=current_time.isoformat(),  # CRITICAL FIX
+            bins=bins_data,
+            trucks=trucks_data,
+            active_routes=routes_data,
+            traffic_conditions=[]
         )
         
     except Exception as e:
-        print(f"❌ API: Error getting system state: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error getting system state: {str(e)}"
         )
-
+    
 @app.post("/api/simulation/start", tags=["Simulation"])
 async def start_simulation():
     """Start simulation"""

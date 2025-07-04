@@ -819,10 +819,9 @@
 
             // FIXED: Add truck markers with route interpolation and debugging
             if (systemState.trucks && Array.isArray(systemState.trucks)) {
-                systemState.trucks.forEach((truck) => {
+                systemState.trucks.forEach((truck, index) => {
                     if (truck.lat && truck.lon && !isNaN(truck.lat) && !isNaN(truck.lon)) {
                         
-                        // Default position (depot)
                         let truckLat = truck.lat;
                         let truckLon = truck.lon;
                         let positionSource = "depot";
@@ -833,18 +832,14 @@
                         const isOnRoute = truckStatus === 'EN_ROUTE' || truckStatus === 'COLLECTING';
                         
                         if (isOnRoute && truck.current_route_id && truck.route_progress > 0) {
-                            
-                            // Find route by truck_id first
-                            let route = systemState.active_routes?.find(r => r.truck_id === truck.id);
-                            
-                            if (!route) {
-                                route = systemState.active_routes?.find(r => r.id === truck.current_route_id);
-                            }
+                            // Find route
+                            let route = systemState.active_routes?.find(r => r.truck_id === truck.id) ||
+                                    systemState.active_routes?.find(r => r.id === truck.current_route_id);
                             
                             if (route && route.waypoints && route.waypoints.length > 1) {
                                 routeUsed = route.id;
                                 
-                                // CRITICAL FIX: Check if waypoints are valid (not all same position)
+                                // Check waypoint validity
                                 const firstWP = route.waypoints[0];
                                 const lastWP = route.waypoints[route.waypoints.length - 1];
                                 const waypointsDistance = calculateDistance(
@@ -855,20 +850,19 @@
                                 console.log(`🔍 Route ${route.id} waypoints span: ${waypointsDistance.toFixed(0)}m`);
                                 
                                 if (waypointsDistance > 50) {
-                                    // Waypoints are valid, use normal interpolation
+                                    // Use valid waypoints
                                     const progress = Math.max(0.01, Math.min(0.99, truck.route_progress || 0.1));
                                     const position = interpolateRoutePosition(route.waypoints, progress);
                                     
                                     if (position) {
                                         truckLat = position.lat;
                                         truckLon = position.lon;
-                                        positionSource = `route ${(progress * 100).toFixed(1)}% (valid waypoints)`;
-                                        console.log(`✅ Valid waypoints: Truck ${truck.id} at [${truckLat.toFixed(6)}, ${truckLon.toFixed(6)}]`);
+                                        positionSource = `route ${(progress * 100).toFixed(1)}%`;
+                                        console.log(`✅ Using route waypoints: Truck ${truck.id} at [${truckLat.toFixed(6)}, ${truckLon.toFixed(6)}]`);
                                     }
                                 } else {
-                                    // FALLBACK: Waypoints are broken, use synthetic positioning
+                                    // Use fallback positioning
                                     console.log(`⚠️ Broken waypoints detected for route ${route.id}, using fallback`);
-                                    
                                     const fallbackPosition = createFallbackPosition(truck, route, truck.route_progress);
                                     if (fallbackPosition) {
                                         truckLat = fallbackPosition.lat;
@@ -877,58 +871,48 @@
                                         console.log(`🔄 Fallback: Truck ${truck.id} at [${truckLat.toFixed(6)}, ${truckLon.toFixed(6)}]`);
                                     }
                                 }
-                            } else {
-                                console.log(`❌ No suitable route found for truck ${truck.id}`);
                             }
                         }
                         
+                        // ENHANCED: Create truck marker with forced visibility
                         const truckIcon = createTruckIcon(truck.status);
                         
                         const marker = L.marker([truckLat, truckLon], { 
                             icon: truckIcon,
-                            zIndexOffset: 1000
+                            zIndexOffset: 10000 + index,  // Ensure trucks are on top
+                            opacity: 1,
+                            riseOnHover: true
                         }).addTo(map);
                         
-                        // Add debug marker if waypoints are broken
-                        if (isOnRoute && routeUsed !== "none") {
-                            const route = systemState.active_routes?.find(r => r.truck_id === truck.id);
-                            if (route && route.waypoints && route.waypoints.length > 1) {
-                                const firstWP = route.waypoints[0];
-                                const lastWP = route.waypoints[route.waypoints.length - 1];
-                                const waypointsDistance = calculateDistance(
-                                    firstWP.lat, firstWP.lon, 
-                                    lastWP.lat, lastWP.lon
-                                );
-                                
-                                if (waypointsDistance <= 50) {
-                                    // Add warning marker for broken waypoints
-                                    const warningIcon = L.divIcon({
-                                        html: '<div style="background: red; color: white; padding: 2px; border-radius: 3px; font-size: 10px;">⚠️ BAD WP</div>',
-                                        className: 'warning-marker',
-                                        iconSize: [50, 20],
-                                        iconAnchor: [25, 10]
-                                    });
-                                    
-                                    const warningMarker = L.marker([firstWP.lat, firstWP.lon], { 
-                                        icon: warningIcon,
-                                        zIndexOffset: 2000
-                                    }).addTo(map);
-                                    
-                                    markers.set(`warning_${truck.id}`, warningMarker);
-                                }
-                            }
-                        }
-                        
-                        marker.bindPopup(`
-                            <b>Truck:</b> ${truck.id}<br>
+                        // Enhanced popup with debug info
+                        const popupContent = `
+                            <div style="font-weight: bold; color: #2196F3;">🚛 Truck ${truck.id}</div>
                             <b>Status:</b> ${truck.status}<br>
-                            <b>Route Used:</b> ${routeUsed}<br>
-                            <b>Progress:</b> ${truck.route_progress ? (truck.route_progress * 100).toFixed(1) + '%' : 'N/A'}<br>
+                            <b>Route ID:</b> ${truck.current_route_id || 'None'}<br>
+                            <b>Progress:</b> ${truck.route_progress ? 
+                                (truck.route_progress * 100).toFixed(1) + '%' : 'N/A'}<br>
                             <b>Position:</b> ${positionSource}<br>
-                            <b>Coords:</b> ${truckLat.toFixed(6)}, ${truckLon.toFixed(6)}
-                        `);
+                            <b>Coords:</b> ${truckLat.toFixed(6)}, ${truckLon.toFixed(6)}<br>
+                            <b>Route Used:</b> ${routeUsed}<br>
+                            <small style="color: #666;">Z-Index: ${10000 + index}</small>
+                        `;
                         
+                        marker.bindPopup(popupContent);
                         markers.set(`truck_${truck.id}`, marker);
+                        
+                        // CRITICAL: Force map to show the truck
+                        console.log(`🚛 TRUCK MARKER ADDED: ${truck.id} at [${truckLat}, ${truckLon}] with z-index ${10000 + index}`);
+                        
+                        // Add temporary debug circle around truck (remove after testing)
+                        const debugCircle = L.circle([truckLat, truckLon], {
+                            radius: 100,
+                            color: 'red',
+                            fillOpacity: 0.2,
+                            weight: 2
+                        }).addTo(map);
+                        markers.set(`debug_${truck.id}`, debugCircle);
+                    } else {
+                        console.log(`❌ Invalid truck coordinates for ${truck.id}: [${truck.lat}, ${truck.lon}]`);
                     }
                 });
             }
@@ -936,6 +920,57 @@
             // Update routes with corridor visualization
             updateRoutes();
         }
+
+        function interpolatePosition(waypoints, progress) {
+            // Enhanced waypoint validation
+            if (!waypoints || waypoints.length < 2) {
+                console.log('❌ Invalid waypoints array:', waypoints);
+                return { lat: 33.6844, lon: 73.0479 }; // Default depot
+            }
+            
+            // Validate waypoint structure
+            const validWaypoints = waypoints.filter(wp => 
+                wp && typeof wp.lat === 'number' && typeof wp.lon === 'number' &&
+                !isNaN(wp.lat) && !isNaN(wp.lon)
+            );
+            
+            if (validWaypoints.length < 2) {
+                console.log('❌ No valid waypoints found');
+                return { lat: 33.6844, lon: 73.0479 };
+            }
+            
+            // Use validated waypoints
+            const totalSegments = validWaypoints.length - 1;
+            const currentSegmentProgress = progress * totalSegments;
+            const segmentIndex = Math.floor(currentSegmentProgress);
+            const segmentProgress = currentSegmentProgress - segmentIndex;
+            
+            // Safety bounds
+            const safeSegmentIndex = Math.max(0, Math.min(segmentIndex, totalSegments - 1));
+            const start = validWaypoints[safeSegmentIndex];
+            const end = validWaypoints[safeSegmentIndex + 1] || validWaypoints[safeSegmentIndex];
+            
+            // Final validation
+            if (!start.lat || !start.lon || !end.lat || !end.lon) {
+                console.log('❌ Invalid waypoint structure:', {start, end});
+                return validWaypoints[0];
+            }
+            
+            // Linear interpolation
+            const interpolated = {
+                lat: start.lat + (end.lat - start.lat) * segmentProgress,
+                lon: start.lon + (end.lon - start.lon) * segmentProgress
+            };
+            
+            // Validate result
+            if (isNaN(interpolated.lat) || isNaN(interpolated.lon)) {
+                console.log('❌ Invalid interpolation result');
+                return start;
+            }
+            
+            return interpolated;
+        }
+
         function calculateDistance(lat1, lon1, lat2, lon2) {
             const R = 6371000; // Earth's radius in meters
             const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -1080,50 +1115,69 @@
         function createTruckIcon(status) {
             let color = '#757575';
             let symbol = '🚛';
+            let pulseColor = color;
             
             switch(status.toUpperCase()) {
                 case 'IDLE': 
                     color = '#4CAF50'; 
                     symbol = '🚛';
+                    pulseColor = '#4CAF50';
                     break;
                 case 'EN_ROUTE': 
                     color = '#2196F3'; 
-                    symbol = '🚛';
+                    symbol = '🚚';
+                    pulseColor = '#2196F3';
                     break;
                 case 'COLLECTING': 
                     color = '#FF9800'; 
-                    symbol = '🚛';
+                    symbol = '🗑️';
+                    pulseColor = '#FF9800';
                     break;
                 case 'RETURNING': 
                     color = '#9C27B0'; 
-                    symbol = '🚛';
+                    symbol = '↩️';
+                    pulseColor = '#9C27B0';
                     break;
                 default: 
                     color = '#757575';
                     symbol = '🚛';
+                    pulseColor = '#757575';
             }
             
             return L.divIcon({
                 html: `
                     <div style="
                         background: ${color}; 
-                        border: 3px solid #fff; 
+                        border: 4px solid #fff; 
                         border-radius: 50%; 
-                        width: 24px; 
-                        height: 24px;
+                        width: 32px; 
+                        height: 32px;
                         display: flex;
                         align-items: center;
                         justify-content: center;
-                        font-size: 12px;
-                        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+                        font-size: 16px;
+                        font-weight: bold;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
                         position: relative;
-                        z-index: 1000;
-                    ">${symbol}</div>
+                        z-index: 10000;
+                        animation: pulse 2s infinite;
+                    " class="truck-marker-enhanced">${symbol}</div>
+                    <style>
+                        @keyframes pulse {
+                            0% { box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 0 0 0 ${pulseColor}40; }
+                            50% { box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 0 0 10px ${pulseColor}20; }
+                            100% { box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 0 0 0 ${pulseColor}40; }
+                        }
+                        .truck-marker-enhanced {
+                            cursor: pointer !important;
+                            pointer-events: auto !important;
+                        }
+                    </style>
                 `,
-                className: 'truck-marker',
-                iconSize: [24, 24],
-                iconAnchor: [12, 12],
-                popupAnchor: [0, -12]
+                className: 'truck-marker-enhanced',
+                iconSize: [32, 32],
+                iconAnchor: [16, 16],
+                popupAnchor: [0, -16]
             });
         }
         function updateRoutes() {

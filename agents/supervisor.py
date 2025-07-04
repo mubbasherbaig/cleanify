@@ -1241,104 +1241,94 @@ class SupervisorAgent(AgentBase):
             return []
 
     async def _get_route_waypoints_with_osrm(self, route):
-        """Get OSRM waypoints for RoutePlannerAgent route - ENHANCED DEBUG VERSION"""
+        """FIXED: OSRM waypoints with proper coordinate validation"""
         try:
             import aiohttp
+            import math
             
-            # Build coordinates from route stops
+            # Build coordinates with validation
             coordinates = []
-            
-            # Start at depot
             depot_lat = self.depot_info.get("latitude", 33.6844)
             depot_lon = self.depot_info.get("longitude", 73.0479)
+            
+            # Start at depot
             coordinates.append(f"{depot_lon},{depot_lat}")
+            print(f"🏭 Depot: [{depot_lat}, {depot_lon}]")
             
-            print(f"🔍 OSRM DEBUG: Route {route.id} has {len(route.stops)} stops")
-            
-            # Add bin locations from stops
-            bins_added = 0
-            for i, stop in enumerate(route.stops):
+            # Add bin coordinates with distance validation
+            valid_bins = 0
+            for stop in route.stops:
                 if stop.stop_type == "bin":
-                    print(f"🔍 Stop {i}: type={stop.stop_type}, bin_id={stop.bin_id}")
+                    bin_lat, bin_lon = None, None
                     
                     if hasattr(stop, 'lat') and hasattr(stop, 'lon') and stop.lat and stop.lon:
-                        coordinates.append(f"{stop.lon},{stop.lat}")
-                        bins_added += 1
-                        print(f"✅ Added stop coordinates: [{stop.lat}, {stop.lon}]")
+                        bin_lat, bin_lon = stop.lat, stop.lon
                     elif stop.bin_id:
-                        # Find bin by ID
                         bin_obj = next((b for b in self.system_state.bins if b.id == stop.bin_id), None)
                         if bin_obj:
-                            coordinates.append(f"{bin_obj.lon},{bin_obj.lat}")
-                            bins_added += 1
-                            print(f"✅ Added bin coordinates: [{bin_obj.lat}, {bin_obj.lon}] for bin {bin_obj.id}")
+                            bin_lat, bin_lon = bin_obj.lat, bin_obj.lon
+                    
+                    # CRITICAL: Validate bin is not at depot location
+                    if bin_lat and bin_lon:
+                        distance_from_depot = ((bin_lat - depot_lat)**2 + (bin_lon - depot_lon)**2)**0.5 * 111000  # Convert to meters
+                        
+                        if distance_from_depot > 100:  # At least 100m from depot
+                            coordinates.append(f"{bin_lon},{bin_lat}")
+                            valid_bins += 1
+                            print(f"✅ Valid bin: [{bin_lat}, {bin_lon}] - {distance_from_depot:.0f}m from depot")
                         else:
-                            print(f"❌ Bin {stop.bin_id} not found in system state")
-                    else:
-                        print(f"❌ Stop has no coordinates: {stop}")
+                            print(f"❌ Bin too close to depot: [{bin_lat}, {bin_lon}] - {distance_from_depot:.0f}m")
             
-            print(f"🔍 Total coordinates collected: {len(coordinates)} (depot + {bins_added} bins)")
-            
-            # Return to depot if we have bin stops
-            if len(coordinates) > 1:
+            # Return to depot
+            if valid_bins > 0:
                 coordinates.append(f"{depot_lon},{depot_lat}")
             
-            if len(coordinates) < 3:  # Need at least depot -> bin -> depot
-                print(f"⚠️ Not enough coordinates for OSRM route {route.id}: {coordinates}")
-                return self._create_fallback_waypoints(route)
+            if len(coordinates) < 3:
+                print(f"⚠️ Insufficient valid coordinates ({len(coordinates)}), using enhanced fallback")
+                return self._create_enhanced_fallback_waypoints(route)
             
+            # Make OSRM request
             coords_str = ";".join(coordinates)
-            osrm_url = f"http://localhost:5000/route/v1/driving/{coords_str}?steps=true&geometries=geojson"
+            osrm_url = f"http://localhost:5000/route/v1/driving/{coords_str}?steps=true&geometries=geojson&overview=full"
             
-            print(f"🗺️ OSRM REQUEST for route {route.id}:")
+            print(f"🗺️ OSRM Request: {len(coordinates)} coordinates")
             print(f"   URL: {osrm_url}")
-            print(f"   Coordinates: {coordinates}")
             
             async with aiohttp.ClientSession() as session:
                 try:
-                    async with session.get(osrm_url, timeout=15) as response:
-                        print(f"📡 OSRM Response status: {response.status}")
-                        
+                    async with session.get(osrm_url, timeout=10) as response:
                         if response.status == 200:
                             data = await response.json()
-                            print(f"🔍 OSRM Response keys: {list(data.keys())}")
                             
                             if data.get("routes") and len(data["routes"]) > 0:
-                                route_data = data["routes"][0]
-                                print(f"🔍 Route data keys: {list(route_data.keys())}")
+                                geometry = data["routes"][0].get("geometry", {}).get("coordinates", [])
                                 
-                                if "geometry" in route_data:
-                                    geometry = route_data["geometry"]["coordinates"]
-                                    print(f"🔍 Geometry has {len(geometry)} coordinate pairs")
-                                    print(f"🔍 First 3 coordinates: {geometry[:3]}")
-                                    print(f"🔍 Last 3 coordinates: {geometry[-3:]}")
+                                if len(geometry) > 1:
+                                    # ENHANCED: Validate coordinate spread
+                                    max_distance = 0.0
+                                    min_lat = min_lon = float('inf')
+                                    max_lat = max_lon = float('-inf')
                                     
-                                    # Check if all coordinates are the same (broken)
-                                    if len(geometry) > 1:
-                                        # Find the maximum distance between any two points in the route
-                                        max_distance = 0.0
-                                        for i in range(len(geometry)):
-                                            for j in range(i + 1, len(geometry)):
-                                                coord1 = geometry[i]
-                                                coord2 = geometry[j]
-                                                distance = ((coord1[0] - coord2[0])**2 + (coord1[1] - coord2[1])**2)**0.5
-                                                max_distance = max(max_distance, distance)
-                                        
-                                        print(f"🔍 Maximum coordinate spread: {max_distance:.6f} degrees")
-                                        
-                                        if max_distance < 0.001:  # Less than ~100m
-                                            print(f"❌ OSRM returned clustered coordinates! All waypoints near same location.")
-                                            return self._create_fallback_waypoints(route)
+                                    for coord in geometry:
+                                        lon, lat = coord[0], coord[1]
+                                        min_lat, max_lat = min(min_lat, lat), max(max_lat, lat)
+                                        min_lon, max_lon = min(min_lon, lon), max(max_lon, lon)
                                     
+                                    lat_span = (max_lat - min_lat) * 111000  # Convert to meters
+                                    lon_span = (max_lon - min_lon) * 111000 * abs(math.cos(math.radians((min_lat + max_lat) / 2)))
+                                    total_span = (lat_span**2 + lon_span**2)**0.5
+                                    
+                                    print(f"🔍 OSRM geometry span: {total_span:.0f}m ({len(geometry)} points)")
+                                    
+                                    if total_span < 200:  # Less than 200m span is suspicious
+                                        print(f"❌ OSRM geometry too clustered ({total_span:.0f}m), using fallback")
+                                        return self._create_enhanced_fallback_waypoints(route)
+                                    
+                                    # Create validated waypoints
                                     waypoints = []
                                     for i, coord in enumerate(geometry):
-                                        waypoint_type = "route"
-                                        waypoint_id = f"osrm_{i}"
-                                        
-                                        # Mark first and last as depot
-                                        if i == 0 or i == len(geometry) - 1:
-                                            waypoint_type = "depot"
-                                            waypoint_id = "depot"
+                                        waypoint_type = "depot" if (i == 0 or i == len(geometry) - 1) else "route"
+                                        waypoint_id = "depot" if waypoint_type == "depot" else f"osrm_{i}"
                                         
                                         waypoints.append({
                                             "lat": coord[1],
@@ -1347,102 +1337,189 @@ class SupervisorAgent(AgentBase):
                                             "id": waypoint_id
                                         })
                                     
-                                    print(f"✅ OSRM SUCCESS: {len(waypoints)} waypoints for route {route.id}")
-                                    print(f"   First waypoint: [{waypoints[0]['lat']}, {waypoints[0]['lon']}]")
-                                    print(f"   Last waypoint: [{waypoints[-1]['lat']}, {waypoints[-1]['lon']}]")
+                                    print(f"✅ OSRM SUCCESS: {len(waypoints)} waypoints, span {total_span:.0f}m")
                                     return waypoints
-                                else:
-                                    print(f"❌ No geometry in OSRM response")
-                            else:
-                                print(f"❌ No routes in OSRM response")
-                                print(f"   Response data: {data}")
+                            
+                            print(f"❌ OSRM returned no valid geometry")
                         else:
                             error_text = await response.text()
-                            print(f"❌ OSRM HTTP ERROR {response.status}")
-                            print(f"   Error response: {error_text}")
-                            
-                except asyncio.TimeoutError:
-                    print(f"❌ OSRM request timed out after 15 seconds")
+                            print(f"❌ OSRM HTTP {response.status}: {error_text}")
+                
                 except Exception as e:
-                    print(f"❌ OSRM request exception: {e}")
-            
-        except Exception as e:
-            print(f"❌ OSRM waypoint generation failed for route {route.id}: {e}")
-            import traceback
-            traceback.print_exc()
+                    print(f"❌ OSRM request failed: {e}")
         
-        # Fallback waypoints
-        print(f"🔄 Using fallback waypoints for route {route.id}")
-        return self._create_fallback_waypoints(route)
+        except Exception as e:
+            print(f"❌ OSRM waypoint generation error: {e}")
+        
+        # Always fallback on any error
+        return self._create_enhanced_fallback_waypoints(route)
+
+    def _create_enhanced_fallback_waypoints(self, route):
+        """Create enhanced fallback waypoints with proper spacing"""
+        depot_lat = self.depot_info.get("latitude", 33.6844)
+        depot_lon = self.depot_info.get("longitude", 73.0479)
+        
+        waypoints = []
+        valid_bins = []
+        
+        # Collect valid bins
+        for stop in route.stops:
+            if stop.stop_type == "bin":
+                bin_lat, bin_lon = None, None
+                
+                if hasattr(stop, 'lat') and hasattr(stop, 'lon') and stop.lat and stop.lon:
+                    bin_lat, bin_lon = stop.lat, stop.lon
+                elif stop.bin_id:
+                    bin_obj = next((b for b in self.system_state.bins if b.id == stop.bin_id), None)
+                    if bin_obj:
+                        bin_lat, bin_lon = bin_obj.lat, bin_obj.lon
+                
+                # Only add bins that are meaningfully distant from depot
+                if bin_lat and bin_lon:
+                    distance = ((bin_lat - depot_lat)**2 + (bin_lon - depot_lon)**2)**0.5 * 111000
+                    if distance > 100:  # At least 100m from depot
+                        valid_bins.append({
+                            "lat": bin_lat,
+                            "lon": bin_lon,
+                            "id": stop.bin_id or stop.id,
+                            "distance": distance
+                        })
+        
+        if not valid_bins:
+            print(f"❌ No valid bins found, creating minimal route")
+            # Create a small route around depot
+            return [
+                {"lat": depot_lat, "lon": depot_lon, "type": "depot", "id": "depot"},
+                {"lat": depot_lat + 0.002, "lon": depot_lon + 0.002, "type": "route", "id": "fallback_1"},
+                {"lat": depot_lat + 0.004, "lon": depot_lon, "type": "route", "id": "fallback_2"},
+                {"lat": depot_lat, "lon": depot_lon, "type": "depot", "id": "depot"}
+            ]
+        
+        # Start at depot
+        waypoints.append({
+            "lat": depot_lat,
+            "lon": depot_lon,
+            "type": "depot",
+            "id": "depot"
+        })
+        
+        # Add intermediate waypoints for smooth movement
+        for bin_data in valid_bins:
+            # Add 3 intermediate points between depot and bin
+            for i in range(1, 4):
+                progress = i / 4.0
+                intermediate_lat = depot_lat + (bin_data["lat"] - depot_lat) * progress
+                intermediate_lon = depot_lon + (bin_data["lon"] - depot_lon) * progress
+                
+                waypoints.append({
+                    "lat": intermediate_lat,
+                    "lon": intermediate_lon,
+                    "type": "route",
+                    "id": f"intermediate_{i}"
+                })
+            
+            # Add bin location
+            waypoints.append({
+                "lat": bin_data["lat"],
+                "lon": bin_data["lon"],
+                "type": "bin",
+                "id": bin_data["id"]
+            })
+        
+        # Return to depot with intermediate points
+        if valid_bins:
+            last_bin = valid_bins[-1]
+            for i in range(1, 4):
+                progress = i / 4.0
+                intermediate_lat = last_bin["lat"] + (depot_lat - last_bin["lat"]) * progress
+                intermediate_lon = last_bin["lon"] + (depot_lon - last_bin["lon"]) * progress
+                
+                waypoints.append({
+                    "lat": intermediate_lat,
+                    "lon": intermediate_lon,
+                    "type": "route",
+                    "id": f"return_{i}"
+                })
+        
+        # Final depot
+        waypoints.append({
+            "lat": depot_lat,
+            "lon": depot_lon,
+            "type": "depot",
+            "id": "depot"
+        })
+        
+        # Calculate total span for validation
+        if len(waypoints) >= 2:
+            first_wp = waypoints[0]
+            last_bin = max(valid_bins, key=lambda x: x["distance"]) if valid_bins else None
+            
+            if last_bin:
+                total_span = ((last_bin["lat"] - first_wp["lat"])**2 + (last_bin["lon"] - first_wp["lon"])**2)**0.5 * 111000
+                print(f"📍 Enhanced fallback: {len(waypoints)} waypoints, span {total_span:.0f}m, {len(valid_bins)} bins")
+            else:
+                print(f"📍 Enhanced fallback: {len(waypoints)} waypoints (minimal route)")
+        
+        return waypoints
 
     def _create_fallback_waypoints(self, route):
-        """Create fallback waypoints when OSRM fails - ENHANCED DEBUG"""
-        print(f"🔧 Creating fallback waypoints for route {route.id}")
-        
+        """Create enhanced fallback waypoints with validation"""
         waypoints = []
         depot_lat = self.depot_info.get("latitude", 33.6844)
         depot_lon = self.depot_info.get("longitude", 73.0479)
         
         # Start at depot
         waypoints.append({
-            "lat": depot_lat, 
-            "lon": depot_lon, 
-            "type": "depot", 
+            "lat": depot_lat,
+            "lon": depot_lon,
+            "type": "depot",
             "id": "depot"
         })
-        print(f"   Added depot start: [{depot_lat}, {depot_lon}]")
         
-        # Add bin waypoints
+        # Add bin waypoints with validation
         bins_added = 0
         for stop in route.stops:
             if stop.stop_type == "bin":
+                bin_lat, bin_lon = None, None
+                
                 if hasattr(stop, 'lat') and hasattr(stop, 'lon') and stop.lat and stop.lon:
+                    bin_lat, bin_lon = stop.lat, stop.lon
+                elif stop.bin_id:
+                    bin_obj = next((b for b in self.system_state.bins if b.id == stop.bin_id), None)
+                    if bin_obj:
+                        bin_lat, bin_lon = bin_obj.lat, bin_obj.lon
+                
+                # Validate bin coordinates are different from depot
+                if bin_lat and bin_lon and (abs(bin_lat - depot_lat) > 0.001 or abs(bin_lon - depot_lon) > 0.001):
                     waypoints.append({
-                        "lat": stop.lat,
-                        "lon": stop.lon,
+                        "lat": bin_lat,
+                        "lon": bin_lon,
                         "type": "bin",
                         "id": stop.bin_id or stop.id
                     })
                     bins_added += 1
-                    print(f"   Added bin from stop: [{stop.lat}, {stop.lon}]")
-                elif stop.bin_id:
-                    # Find bin in system state
-                    bin_obj = next((b for b in self.system_state.bins if b.id == stop.bin_id), None)
-                    if bin_obj:
-                        waypoints.append({
-                            "lat": bin_obj.lat,
-                            "lon": bin_obj.lon,
-                            "type": "bin",
-                            "id": bin_obj.id
-                        })
-                        bins_added += 1
-                        print(f"   Added bin from lookup: [{bin_obj.lat}, {bin_obj.lon}] (ID: {bin_obj.id})")
-                    else:
-                        print(f"   ❌ Could not find bin {stop.bin_id} in system state")
         
         # Return to depot
         waypoints.append({
-            "lat": depot_lat, 
-            "lon": depot_lon, 
-            "type": "depot", 
+            "lat": depot_lat,
+            "lon": depot_lon,
+            "type": "depot",
             "id": "depot"
         })
-        print(f"   Added depot return: [{depot_lat}, {depot_lon}]")
         
-        print(f"📍 Fallback created {len(waypoints)} waypoints ({bins_added} bins)")
+        print(f"📍 Fallback created {len(waypoints)} waypoints ({bins_added} valid bins)")
         
-        # CRITICAL: Check if fallback waypoints are also broken
-        if len(waypoints) >= 2:
-            first_wp = waypoints[0]
-            last_wp = waypoints[-1]
-            wp_distance = ((first_wp['lat'] - last_wp['lat'])**2 + (first_wp['lon'] - last_wp['lon'])**2)**0.5
-            print(f"🔍 Fallback waypoint spread: {wp_distance:.6f} degrees")
-            
-            if wp_distance < 0.001 and bins_added > 0:
-                print(f"❌ FALLBACK WAYPOINTS ALSO BROKEN! All at same location.")
-                print(f"   This suggests route.stops don't have proper bin coordinates")
-        
-        return waypoints
+        # Final validation - ensure we have movement
+        if len(waypoints) >= 3 and bins_added > 0:
+            return waypoints
+        else:
+            print(f"❌ Fallback waypoints insufficient, creating minimal route")
+            # Create minimal depot-only route
+            return [
+                {"lat": depot_lat, "lon": depot_lon, "type": "depot", "id": "depot"},
+                {"lat": depot_lat + 0.001, "lon": depot_lon + 0.001, "type": "route", "id": "fallback"},
+                {"lat": depot_lat, "lon": depot_lon, "type": "depot", "id": "depot"}
+            ]
 
     async def _enhance_routes_with_corridor_agent(self, routes):
         """Use CorridorAgent's actual build_corridor method"""
@@ -1902,64 +1979,52 @@ class SupervisorAgent(AgentBase):
         self.register_handler("get_agent_health", self._handle_get_agent_health)
         self.register_handler("route_planned", self._handle_route_planned)
     
-    async def _handle_load_config(self, data: Dict[str, Any]):
-        """Handle configuration loading - USE EXISTING HOURLY RATES"""
+    async def _handle_load_config(self, config_data):
+        """Load configuration and create system objects - FIXED VERSION"""
         try:
-            print("SUPERVISOR: Loading config")
-            config = data.get("config", {})
+            config = config_data.get("config", config_data)
             
-            if not config:
-                raise ValueError("No config data received")
+            # Store depot info
+            if "depot" in config:
+                self.depot_info = config["depot"]
+                print(f"✅ Depot loaded: {self.depot_info.get('name', 'Unnamed')}")
             
-            bins_data = config.get("bins", [])
-            trucks_data = config.get("trucks", [])
-            depot_data = config.get("depot", {})
-            
-            # Parse bins with EXISTING hourly fill rate support
+            # Create bins with proper BinType handling
             bins = []
-            for bin_data in bins_data:
-                bin_obj = Bin(
-                    id=str(bin_data["id"]),
-                    lat=float(bin_data["latitude"]),
-                    lon=float(bin_data["longitude"]), 
-                    capacity_l=int(bin_data["capacity_l"]),
-                    fill_level=float(bin_data.get("fill_level", 50.0)),
-                    fill_rate_lph=float(bin_data.get("fill_rate_lph", 5.0)),
-                    tile_id="",
-                    bin_type=BinType.GENERAL
-                )
-                
-                # PROPERLY load existing hourly fill rates from config
-                hourly_rates = bin_data.get("hourly_fill_rates", {})
-                if hourly_rates:
-                    # Convert string keys to integers and store
-                    bin_obj.metadata["hourly_fill_rates"] = {
-                        int(hour): float(rate) for hour, rate in hourly_rates.items()
-                    }
-                    bin_obj.metadata["has_hourly_rates"] = True
-                    rate_range = f"{min(hourly_rates.values()):.1f}-{max(hourly_rates.values()):.1f}L/h"
-                    print(f"Bin {bin_obj.id} loaded with hourly rates: {rate_range}")
-                else:
-                    bin_obj.metadata["has_hourly_rates"] = False
-                    print(f"Bin {bin_obj.id} using base rate: {bin_obj.fill_rate_lph}L/h")
-                
-                bin_obj.last_updated = datetime.now()
-                bins.append(bin_obj)
+            if "bins" in config:
+                for bin_config in config["bins"]:
+                    # Set default bin_type if not specified
+                    bin_type_str = bin_config.get("bin_type", "general")
+                    try:
+                        bin_type = BinType(bin_type_str.lower())
+                    except ValueError:
+                        bin_type = BinType.GENERAL  # Default fallback
+                    
+                    bin_obj = Bin(
+                        id=bin_config["id"],
+                        lat=bin_config.get("latitude", bin_config.get("lat", 0.0)),
+                        lon=bin_config.get("longitude", bin_config.get("lon", 0.0)),
+                        capacity_l=bin_config.get("capacity_l", 240),
+                        fill_level=bin_config.get("fill_level", 75.0),
+                        fill_rate_lph=bin_config.get("fill_rate_lph", 3.0),
+                        tile_id=bin_config.get("tile_id", ""),
+                        bin_type=bin_type  # Properly set BinType
+                    )
+                    bins.append(bin_obj)
             
-            # Parse trucks
+            # Create trucks
             trucks = []
-            for truck_data in trucks_data:
-                truck = Truck(
-                    id=str(truck_data["id"]),
-                    name=truck_data.get("name", truck_data["id"]),
-                    lat=depot_data.get("latitude", 33.6844),
-                    lon=depot_data.get("longitude", 73.0479),
-                    capacity_l=int(truck_data.get("capacity", 5000)),
-                    status=TruckStatus.IDLE
-                )
-                truck.current_load_l = 0
-                truck.last_updated = datetime.now()
-                trucks.append(truck)
+            if "trucks" in config:
+                for truck_config in config["trucks"]:
+                    truck_obj = Truck(
+                        id=truck_config["id"],
+                        name=truck_config.get("name", truck_config["id"]),
+                        capacity_l=truck_config.get("capacity_l", truck_config.get("capacity", 5000)),
+                        lat=self.depot_info.get("latitude", 33.6844),
+                        lon=self.depot_info.get("longitude", 73.0479),
+                        status=TruckStatus.IDLE
+                    )
+                    trucks.append(truck_obj)
             
             # Create system state
             self.system_state = SystemState(
@@ -1969,19 +2034,16 @@ class SupervisorAgent(AgentBase):
                 active_routes=[],
                 traffic_conditions=[],
                 simulation_running=False,
-                current_time=self.simulation_current_time or datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+                current_time=datetime.now()
             )
             
-            self.depot_info = depot_data
-            
-            print(f"Config loaded: {len(bins)} bins, {len(trucks)} trucks")
-            bins_with_hourly = len([b for b in bins if b.metadata.get("has_hourly_rates", False)])
-            print(f"Bins with hourly rates: {bins_with_hourly}/{len(bins)}")
-            
+            print(f"✅ Configuration loaded: {len(bins)} bins, {len(trucks)} trucks")
             return True
             
         except Exception as e:
-            print(f"Config loading failed: {e}")
+            print(f"❌ Configuration loading failed: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     async def _handle_start_simulation(self, data: Dict[str, Any]):
