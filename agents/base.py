@@ -260,10 +260,10 @@ class AgentBase(ABC):
             maxlen=self.settings.redis.STREAM_MAXLEN
         )
         
-        self.logger.debug("Message sent", 
-                         message_type=message_type, 
-                         target_stream=target_stream,
-                         message_id=message_id)
+        # self.logger.debug("Message sent", 
+        #                  message_type=message_type, 
+        #                  target_stream=target_stream,
+        #                  message_id=message_id)
         
         return message_id
     

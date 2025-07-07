@@ -13,7 +13,7 @@ from pathlib import Path
 @dataclass
 class CorridorSettings:
     """Corridor analysis configuration"""
-    CORRIDOR_HALF_M: float = 250.0
+    CORRIDOR_HALF_M: float = 500.0
     WAY_OFFSET_THRESH_M: float = 400.0
     MAX_DETOUR_KM: float = 0.3
     MAX_DETOUR_RATIO: float = 0.05  # 5%
@@ -92,12 +92,12 @@ class MLSettings:
 
 @dataclass
 class LLMSettings:
-    """LLM advisor configuration"""
-    ENABLE_LLM_ADVISOR: bool = False
-    MODEL_NAME: str = "gpt-3.5-turbo"  # Changed from local model
-    MAX_NEW_TOKENS: int = 300  # Reduced for API efficiency
-    TEMPERATURE: float = 0.7
-    REQUEST_TIMEOUT_SEC: int = 30
+    ENABLE_LLM_ADVISOR: bool = True               # master switch
+    MODEL_NAME: str          = "gpt-3.5-turbo-0125"
+    TEMPERATURE: float       = 0.0
+    MAX_NEW_TOKENS: int      = 60                 # tiny JSON replies
+    MAX_CALLS_PER_HOUR: int  = 4                  # 1 call / 15 min
+    MAX_CANDIDATE_BINS: int  = 10 
 
 
 class Settings:
@@ -171,7 +171,7 @@ class Settings:
         self.api.LOG_LEVEL = os.getenv("LOG_LEVEL", self.api.LOG_LEVEL)
         
         # Feature flags from environment
-        self.ENABLE_LLM_ADVISOR = os.getenv("ENABLE_LLM_ADVISOR", "false").lower() == "true"
+        self.ENABLE_LLM_ADVISOR = os.getenv("ENABLE_LLM_ADVISOR", "true").lower() == "true"
         self.ENABLE_TILING = os.getenv("ENABLE_TILING", "true").lower() == "true"
         self.ENABLE_TRAFFIC_WAITING = os.getenv("ENABLE_TRAFFIC_WAITING", "true").lower() == "true"
         

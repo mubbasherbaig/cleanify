@@ -14,11 +14,11 @@ from agents.supervisor import SupervisorAgent
 from core.settings import settings
 import redis.asyncio as redis
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# logging.basicConfig(
+#     level=logging.INFO,
+#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# )
+# logger = logging.getLogger(__name__)
 
 
 async def check_redis_connection():

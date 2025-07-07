@@ -678,7 +678,7 @@
             </div>
         </div>
     </div>
-
+    <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         // Global variables
@@ -692,18 +692,20 @@
         let corridorVisible = true;
         let activeCorridorBins = new Set();
         let isUserAdjustingSpeed = false;
+        
 
         const API_BASE = 'http://localhost:8000/api';
-
+        let corridorLayer;
         // Initialize map
         function initMap() {
             map = L.map('map').setView([33.6844, 73.0479], 13);
-            
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap contributors'
             }).addTo(map);
-        }
 
+            // 2. create the layer only after the map exists
+            corridorLayer = L.layerGroup().addTo(map);
+        }
         // Initialize everything
         document.addEventListener('DOMContentLoaded', function() {
             initMap();
@@ -742,6 +744,7 @@
         }
 
         function clearCorridorAreas() {
+            corridorLayer.clearLayers();
             corridorAreas.forEach(area => map.removeLayer(area));
             corridorAreas.clear();
         }
@@ -763,163 +766,149 @@
         }
 
         // Enhanced map update with corridor visualization
+        /* ----------------------------------------------------------
+        * Leaflet helpers
+        * -------------------------------------------------------- */
+        // distance (Haversine, metres)
+        function haversine(lat1, lon1, lat2, lon2) {
+            const R = 6371000;
+            const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+            const Δφ = (lat2 - lat1) * Math.PI / 180;
+            const Δλ = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(Δφ / 2) ** 2 +
+                    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+            return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        }
+
+        // cumulative polyline length (metres)
+        function polylineLength(waypoints) {
+            let total = 0;
+            for (let i = 1; i < waypoints.length; i++) {
+                total += haversine(
+                    waypoints[i - 1].lat, waypoints[i - 1].lon,
+                    waypoints[i].lat,     waypoints[i].lon
+                );
+            }
+            return total;
+        }
+
+        /* ----------------------------------------------------------
+        * Main updater
+        * -------------------------------------------------------- */
         function updateMap() {
             if (!systemState) return;
 
-            // Clear existing markers and routes
+            /* ---------- housekeeping ---------- */
             clearMarkers();
             clearRoutes();
-            if (corridorVisible) {
-                clearCorridorAreas();
+            if (corridorVisible) clearCorridorAreas();
+
+            /* ---------- depot ---------- */
+            if (currentConfig?.depot) {
+                markers.set('depot',
+                    L.circleMarker(
+                        [currentConfig.depot.latitude, currentConfig.depot.longitude],
+                        { radius: 12, fillColor: '#FF5722', color: '#fff',
+                        weight: 2, opacity: 1, fillOpacity: 0.8 }
+                    )
+                    .addTo(map)
+                    .bindPopup(`<b>Depot:</b> ${currentConfig.depot.name}`)
+                );
             }
 
-            // Add depot marker
-            if (currentConfig && currentConfig.depot) {
-                markers.set('depot', L.circleMarker([currentConfig.depot.latitude, currentConfig.depot.longitude], {
-                    radius: 12,
-                    fillColor: '#FF5722',
-                    color: '#fff',
-                    weight: 2,
+            /* ---------- bins ---------- */
+            (systemState.bins ?? []).forEach(bin => {
+                if (!isFinite(bin.lat) || !isFinite(bin.lon)) return;
+
+                const fill = bin.fill_level ?? 0;
+                const isCorridorBin = activeCorridorBins.has(bin.id);
+
+                const marker = L.circleMarker([bin.lat, bin.lon], {
+                    radius: Math.max(6, 6 + (fill / 100) * 4),
+                    fillColor: getFillLevelColor(fill),
+                    color: isCorridorBin ? '#FF9800' : '#fff',
+                    weight: isCorridorBin ? 3 : 2,
                     opacity: 1,
-                    fillOpacity: 0.8
-                }).addTo(map).bindPopup(`<b>Depot:</b> ${currentConfig.depot.name}`));
-            }
+                    fillOpacity: isCorridorBin ? 0.9 : 0.8,
+                    className: isCorridorBin ? 'corridor-bin-marker' : 'regular-bin-marker'
+                })
+                .addTo(map)
+                .bindPopup(`
+                    <b>Bin:</b> ${bin.id}<br>
+                    <b>Fill Level:</b> ${fill.toFixed(1)}%<br>
+                    <b>Capacity:</b> ${bin.capacity_l} L<br>
+                    <b>Current Rate:</b> ${bin.current_hourly_rate ?? bin.fill_rate_lph} L/h<br>
+                    <b>Status:</b> ${fill >= 95 ? 'Critical' :
+                                        fill >= 85 ? 'Urgent'   : 'Normal'}<br>
+                    ${isCorridorBin ? '<b style="color:#FF9800;">📍 Corridor Bin</b>' : ''}
+                `);
 
-            // Add bin markers with corridor highlighting
-            if (systemState.bins && Array.isArray(systemState.bins)) {
-                systemState.bins.forEach((bin) => {
-                    if (bin.lat && bin.lon && !isNaN(bin.lat) && !isNaN(bin.lon)) {
-                        const fillLevel = bin.fill_level || 0;
-                        const color = getFillLevelColor(fillLevel);
-                        const isCorridorBin = activeCorridorBins.has(bin.id);
-                        
-                        const marker = L.circleMarker([bin.lat, bin.lon], {
-                            radius: Math.max(6, 6 + (fillLevel / 100) * 4),
-                            fillColor: color,
-                            color: isCorridorBin ? '#FF9800' : '#fff',
-                            weight: isCorridorBin ? 3 : 2,
-                            opacity: 1,
-                            fillOpacity: isCorridorBin ? 0.9 : 0.8,
-                            className: isCorridorBin ? 'corridor-bin-marker' : 'regular-bin-marker'
-                        }).addTo(map);
+                markers.set(bin.id, marker);
+            });
 
-                        const popupContent = `
-                            <b>Bin:</b> ${bin.id}<br>
-                            <b>Fill Level:</b> ${fillLevel.toFixed(1)}%<br>
-                            <b>Capacity:</b> ${bin.capacity_l}L<br>
-                            <b>Current Rate:</b> ${bin.current_hourly_rate || bin.fill_rate_lph}L/h<br>
-                            <b>Status:</b> ${fillLevel >= 95 ? 'Critical' : fillLevel >= 85 ? 'Urgent' : 'Normal'}<br>
-                            ${isCorridorBin ? '<b style="color: #FF9800;">📍 Corridor Bin</b>' : ''}
-                        `;
-                        marker.bindPopup(popupContent);
-                        markers.set(bin.id, marker);
-                    }
-                });
-            }
+            /* ---------- trucks ---------- */
+            (systemState.trucks ?? []).forEach((truck, i) => {
+                if (!isFinite(truck.lat) || !isFinite(truck.lon)) {
+                    console.warn(`Invalid truck coords for ${truck.id}`);
+                    return;
+                }
 
-            // FIXED: Add truck markers with route interpolation and debugging
-            if (systemState.trucks && Array.isArray(systemState.trucks)) {
-                systemState.trucks.forEach((truck, index) => {
-                    if (truck.lat && truck.lon && !isNaN(truck.lat) && !isNaN(truck.lon)) {
-                        
-                        let truckLat = truck.lat;
-                        let truckLon = truck.lon;
-                        let positionSource = "depot";
-                        let routeUsed = "none";
-                        
-                        // Check if truck should be on route
-                        const truckStatus = truck.status.toUpperCase();
-                        const isOnRoute = truckStatus === 'EN_ROUTE' || truckStatus === 'COLLECTING';
-                        
-                        if (isOnRoute && truck.current_route_id && truck.route_progress > 0) {
-                            // Find route
-                            let route = systemState.active_routes?.find(r => r.truck_id === truck.id) ||
-                                    systemState.active_routes?.find(r => r.id === truck.current_route_id);
-                            
-                            if (route && route.waypoints && route.waypoints.length > 1) {
-                                routeUsed = route.id;
-                                
-                                // Check waypoint validity
-                                const firstWP = route.waypoints[0];
-                                const lastWP = route.waypoints[route.waypoints.length - 1];
-                                const waypointsDistance = calculateDistance(
-                                    firstWP.lat, firstWP.lon, 
-                                    lastWP.lat, lastWP.lon
-                                );
-                                
-                                console.log(`🔍 Route ${route.id} waypoints span: ${waypointsDistance.toFixed(0)}m`);
-                                
-                                if (waypointsDistance > 50) {
-                                    // Use valid waypoints
-                                    const progress = Math.max(0.01, Math.min(0.99, truck.route_progress || 0.1));
-                                    const position = interpolateRoutePosition(route.waypoints, progress);
-                                    
-                                    if (position) {
-                                        truckLat = position.lat;
-                                        truckLon = position.lon;
-                                        positionSource = `route ${(progress * 100).toFixed(1)}%`;
-                                        console.log(`✅ Using route waypoints: Truck ${truck.id} at [${truckLat.toFixed(6)}, ${truckLon.toFixed(6)}]`);
-                                    }
-                                } else {
-                                    // Use fallback positioning
-                                    console.log(`⚠️ Broken waypoints detected for route ${route.id}, using fallback`);
-                                    const fallbackPosition = createFallbackPosition(truck, route, truck.route_progress);
-                                    if (fallbackPosition) {
-                                        truckLat = fallbackPosition.lat;
-                                        truckLon = fallbackPosition.lon;
-                                        positionSource = `fallback ${(truck.route_progress * 100).toFixed(1)}%`;
-                                        console.log(`🔄 Fallback: Truck ${truck.id} at [${truckLat.toFixed(6)}, ${truckLon.toFixed(6)}]`);
-                                    }
-                                }
-                            }
+                let [lat, lon] = [truck.lat, truck.lon];
+                let posNote   = 'reported-coords';
+
+                const active = ['EN_ROUTE', 'COLLECTING'].includes(truck.status?.toUpperCase());
+                if (active && truck.current_route_id && truck.route_progress != null) {
+
+                    const route = systemState.active_routes?.find(r =>
+                        r.truck_id === truck.id || r.id === truck.current_route_id
+                    );
+
+                    if (route?.waypoints?.length > 1) {
+                        /* --- deduplicate trailing depot waypoint --- */
+                        let wps = [...route.waypoints];
+                        if (wps.length > 2 &&
+                            wps[0].lat === wps[wps.length - 1].lat &&
+                            wps[0].lon === wps[wps.length - 1].lon) {
+                            wps.pop();
                         }
-                        
-                        // ENHANCED: Create truck marker with forced visibility
-                        const truckIcon = createTruckIcon(truck.status);
-                        
-                        const marker = L.marker([truckLat, truckLon], { 
-                            icon: truckIcon,
-                            zIndexOffset: 10000 + index,  // Ensure trucks are on top
-                            opacity: 1,
-                            riseOnHover: true
-                        }).addTo(map);
-                        
-                        // Enhanced popup with debug info
-                        const popupContent = `
-                            <div style="font-weight: bold; color: #2196F3;">🚛 Truck ${truck.id}</div>
-                            <b>Status:</b> ${truck.status}<br>
-                            <b>Route ID:</b> ${truck.current_route_id || 'None'}<br>
-                            <b>Progress:</b> ${truck.route_progress ? 
-                                (truck.route_progress * 100).toFixed(1) + '%' : 'N/A'}<br>
-                            <b>Position:</b> ${positionSource}<br>
-                            <b>Coords:</b> ${truckLat.toFixed(6)}, ${truckLon.toFixed(6)}<br>
-                            <b>Route Used:</b> ${routeUsed}<br>
-                            <small style="color: #666;">Z-Index: ${10000 + index}</small>
-                        `;
-                        
-                        marker.bindPopup(popupContent);
-                        markers.set(`truck_${truck.id}`, marker);
-                        
-                        // CRITICAL: Force map to show the truck
-                        console.log(`🚛 TRUCK MARKER ADDED: ${truck.id} at [${truckLat}, ${truckLon}] with z-index ${10000 + index}`);
-                        
-                        // Add temporary debug circle around truck (remove after testing)
-                        const debugCircle = L.circle([truckLat, truckLon], {
-                            radius: 100,
-                            color: 'red',
-                            fillOpacity: 0.2,
-                            weight: 2
-                        }).addTo(map);
-                        markers.set(`debug_${truck.id}`, debugCircle);
-                    } else {
-                        console.log(`❌ Invalid truck coordinates for ${truck.id}: [${truck.lat}, ${truck.lon}]`);
-                    }
-                });
-            }
 
-            // Update routes with corridor visualization
+                        /* --- validate polyline length --- */
+                        if (polylineLength(wps) > 50) {          // ≥ 50 m ⇒ treat as valid
+                            const prog = Math.max(0, Math.min(1, truck.route_progress));
+                            const pos  = interpolateRoutePosition(wps, prog);
+                            if (pos) {
+                                [lat, lon] = [pos.lat, pos.lon];
+                                posNote    = `route ${ (prog * 100).toFixed(1) } %`;
+                            }
+                        } else {
+                            console.warn(`Route ${route.id} too short → fallback`);
+                        }
+                    }
+                }
+
+                const marker = L.marker([lat, lon], {
+                    icon: createTruckIcon(truck.status),
+                    zIndexOffset: 10_000 + i,
+                    riseOnHover: true
+                })
+                .addTo(map)
+                .bindPopup(`
+                    <div style="font-weight:bold;color:#2196F3">🚛 Truck ${truck.id}</div>
+                    <b>Status:</b> ${truck.status}<br>
+                    <b>Route ID:</b> ${truck.current_route_id ?? '—'}<br>
+                    <b>Progress:</b> ${truck.route_progress != null ?
+                                        (truck.route_progress * 100).toFixed(1) + '%' : '—'}<br>
+                    <b>Position source:</b> ${posNote}<br>
+                    <b>Coords:</b> ${lat.toFixed(6)}, ${lon.toFixed(6)}
+                `);
+
+                markers.set(`truck_${truck.id}`, marker);
+            });
+
+            /* ---------- routes / corridors ---------- */
             updateRoutes();
         }
+
 
         function interpolatePosition(waypoints, progress) {
             // Enhanced waypoint validation
@@ -983,40 +972,27 @@
         }
         function interpolateRoutePosition(waypoints, progress) {
             if (!waypoints || waypoints.length < 2) {
-                console.log('❌ Invalid waypoints for interpolation');
                 return null;
             }
             
-            // Ensure progress is between 0.01 and 0.99 to avoid edge cases
-            progress = Math.max(0.01, Math.min(0.99, progress));
+            // Clamp progress
+            progress = Math.max(0.0, Math.min(0.999, progress));
             
-            // Find the segment
+            // Calculate which segment we're on
             const totalSegments = waypoints.length - 1;
             const segmentFloat = progress * totalSegments;
             const segmentIndex = Math.floor(segmentFloat);
             const segmentProgress = segmentFloat - segmentIndex;
             
-            // Safety bounds
-            const safeSegmentIndex = Math.max(0, Math.min(segmentIndex, totalSegments - 1));
-            const start = waypoints[safeSegmentIndex];
-            const end = waypoints[safeSegmentIndex + 1] || waypoints[safeSegmentIndex];
+            // Get start and end waypoints
+            const startWP = waypoints[Math.min(segmentIndex, waypoints.length - 1)];
+            const endWP = waypoints[Math.min(segmentIndex + 1, waypoints.length - 1)];
             
-            // Validate waypoint structure
-            if (!start.lat || !start.lon || !end.lat || !end.lon) {
-                console.log('❌ Invalid waypoint structure:', {start, end});
-                return waypoints[0];
-            }
-            
-            // Linear interpolation
-            const interpolated = {
-                lat: start.lat + (end.lat - start.lat) * segmentProgress,
-                lon: start.lon + (end.lon - start.lon) * segmentProgress
+            // Linear interpolation between waypoints
+            return {
+                lat: startWP.lat + (endWP.lat - startWP.lat) * segmentProgress,
+                lon: startWP.lon + (endWP.lon - startWP.lon) * segmentProgress
             };
-            
-            console.log(`🧮 Interpolation: segment ${safeSegmentIndex}/${totalSegments}, progress ${segmentProgress.toFixed(3)}`);
-            console.log(`📍 Result: [${interpolated.lat.toFixed(6)}, ${interpolated.lon.toFixed(6)}]`);
-            
-            return interpolated;
         }
         function createFallbackPosition(truck, route, progress) {
             // Create a synthetic route from depot to a bin location
@@ -1242,26 +1218,28 @@
             updateCorridorSection();
         }
 
-        function drawCorridorArea(route, latlngs) {
-            if (!latlngs || latlngs.length < 2) return;
-            
-            // Simple approach: Create overlapping circles for smoother appearance
-            const corridorRadius = 250; // 250m radius
-            const stepSize = Math.max(1, Math.floor(latlngs.length / 20)); // Max 20 circles per route
-            
-            for (let i = 0; i < latlngs.length; i += stepSize) {
-                const circle = L.circle(latlngs[i], {
-                    radius: corridorRadius,
-                    fillColor: '#FF9800',
-                    fillOpacity: 0.08, // Very transparent for overlap
-                    color: '#FF9800',
-                    weight: 1,
-                    opacity: 0.2
-                }).addTo(map);
-                
-                corridorAreas.set(`corridor_${route.id}_${i}`, circle);
-            }
+        function drawCorridorArea(route, latlngs, halfWidthM = 500) {
+            // ❶ Build clean [lon, lat] pairs for Turf
+            const coords = latlngs
+                .map(pt => [
+                    Number(pt.lng ?? pt.lon ?? pt[1]),
+                    Number(pt.lat ?? pt[0])
+                ])
+                .filter(c => Number.isFinite(c[0]) && Number.isFinite(c[1]));
+
+            if (coords.length < 2) return;           // nothing to buffer
+
+            // ❷ Buffer & render
+            const tube  = turf.buffer(turf.lineString(coords),
+                                    halfWidthM, { units: 'meters', steps: 16 });
+
+            L.geoJSON(tube, {
+                style: { color:'#FF9800', weight:1, fillColor:'#FFF176', fillOpacity:0.15 }
+            }).addTo(corridorLayer);
+
+            corridorAreas.set(`corridor_${route.id}`, tube);
         }
+
 
         function drawSimplifiedCorridor(route, latlngs) {
             const corridorRadius = 250; // 250m radius

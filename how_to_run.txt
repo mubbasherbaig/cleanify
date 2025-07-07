@@ -1,0 +1,2 @@
+uvicorn api.routes:app --reload --port 8000
+
