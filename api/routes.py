@@ -435,9 +435,59 @@ async def plan_routes():
             detail=f"Error triggering route planning: {str(e)}"
         )
 
+# @app.post("/api/routes/trigger", tags=["Operations"]) 
+# async def trigger_route_planning():
+#     """Manually trigger route planning"""
+    
+#     if not supervisor:
+#         raise HTTPException(
+#             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+#             detail="Supervisor not available"
+#         )
+    
+#     try:
+#         print("🚀 API: Manual route planning trigger requested")
+        
+#         if not supervisor.system_state:
+#             raise HTTPException(
+#                 status_code=status.HTTP_400_BAD_REQUEST,
+#                 detail="No system state available"
+#             )
+        
+#         # Find urgent bins
+#         urgent_bins = [b for b in supervisor.system_state.bins if b.fill_level >= 85.0]
+#         available_trucks = [t for t in supervisor.system_state.trucks if t.status == TruckStatus.IDLE]
+        
+#         print(f"🎯 API: Found {len(urgent_bins)} urgent bins, {len(available_trucks)} available trucks")
+        
+#         if urgent_bins and available_trucks:
+#             await supervisor._trigger_route_planning_direct(urgent_bins, available_trucks)
+            
+#             return {
+#                 "status": "success",
+#                 "routes_created": min(len(urgent_bins), len(available_trucks)),
+#                 "urgent_bins": len(urgent_bins),
+#                 "available_trucks": len(available_trucks),
+#                 "message": "Route planning triggered successfully"
+#             }
+#         else:
+#             return {
+#                 "status": "no_action",
+#                 "urgent_bins": len(urgent_bins),
+#                 "available_trucks": len(available_trucks),
+#                 "message": "No urgent bins or available trucks"
+#             }
+            
+#     except Exception as e:
+#         print(f"❌ API: Route planning error: {e}")
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail=f"Route planning error: {str(e)}"
+#         )
+
 @app.post("/api/routes/trigger", tags=["Operations"]) 
 async def trigger_route_planning():
-    """Manually trigger route planning"""
+    """Manually trigger route planning - FIXED VERSION"""
     
     if not supervisor:
         raise HTTPException(
@@ -454,35 +504,140 @@ async def trigger_route_planning():
                 detail="No system state available"
             )
         
-        # Find urgent bins
+        # CRITICAL FIX: Clear existing routes first
+        print("🧹 API: Clearing existing routes before planning new ones")
+        await supervisor._clear_active_routes()
+        
+        # Find urgent bins and available trucks
         urgent_bins = [b for b in supervisor.system_state.bins if b.fill_level >= 85.0]
         available_trucks = [t for t in supervisor.system_state.trucks if t.status == TruckStatus.IDLE]
         
         print(f"🎯 API: Found {len(urgent_bins)} urgent bins, {len(available_trucks)} available trucks")
         
         if urgent_bins and available_trucks:
+            # Use the fixed direct route planning method
             await supervisor._trigger_route_planning_direct(urgent_bins, available_trucks)
+            
+            # Verify routes were created without duplicates
+            final_route_count = len(supervisor.system_state.active_routes)
             
             return {
                 "status": "success",
-                "routes_created": min(len(urgent_bins), len(available_trucks)),
+                "routes_created": final_route_count,
                 "urgent_bins": len(urgent_bins),
                 "available_trucks": len(available_trucks),
-                "message": "Route planning triggered successfully"
+                "message": f"Route planning completed successfully with {final_route_count} unique routes"
             }
         else:
             return {
                 "status": "no_action",
                 "urgent_bins": len(urgent_bins),
                 "available_trucks": len(available_trucks),
-                "message": "No urgent bins or available trucks"
+                "message": "No urgent bins or available trucks found"
             }
             
     except Exception as e:
         print(f"❌ API: Route planning error: {e}")
+        
+        # Emergency cleanup on API error
+        try:
+            await supervisor._emergency_route_cleanup()
+        except:
+            pass
+            
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Route planning error: {str(e)}"
+        )
+
+@app.post("/api/routes/clear", tags=["Operations"])
+async def clear_all_routes():
+    """Manually clear all active routes - DIAGNOSTIC ENDPOINT"""
+    
+    if not supervisor:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Supervisor not available"
+        )
+    
+    try:
+        routes_before = len(supervisor.system_state.active_routes) if supervisor.system_state else 0
+        
+        print("🧹 API: Manual route clearing requested")
+        await supervisor._emergency_route_cleanup()
+        
+        routes_after = len(supervisor.system_state.active_routes) if supervisor.system_state else 0
+        
+        return {
+            "status": "success",
+            "routes_cleared": routes_before - routes_after,
+            "routes_before": routes_before,
+            "routes_after": routes_after,
+            "message": f"Cleared {routes_before - routes_after} routes"
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Route clearing error: {str(e)}"
+        )
+    
+@app.get("/api/routes/diagnostics", tags=["Debug"])
+async def get_route_diagnostics():
+    """Get detailed route diagnostics - DIAGNOSTIC ENDPOINT"""
+    
+    if not supervisor or not supervisor.system_state:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="System not available"
+        )
+    
+    try:
+        # Analyze route integrity
+        truck_assignments = {}
+        bin_assignments = {}
+        duplicate_trucks = []
+        duplicate_bins = []
+        
+        for route in supervisor.system_state.active_routes:
+            # Check truck duplicates
+            truck_id = route.truck_id
+            if truck_id in truck_assignments:
+                duplicate_trucks.append(truck_id)
+            else:
+                truck_assignments[truck_id] = route.id
+                
+            # Check bin duplicates
+            for bin_id in route.bin_ids:
+                if bin_id in bin_assignments:
+                    duplicate_bins.append(bin_id)
+                else:
+                    bin_assignments[bin_id] = route.id
+        
+        return {
+            "total_routes": len(supervisor.system_state.active_routes),
+            "unique_trucks_assigned": len(truck_assignments),
+            "unique_bins_assigned": len(bin_assignments),
+            "duplicate_trucks": list(set(duplicate_trucks)),
+            "duplicate_bins": list(set(duplicate_bins)),
+            "integrity_issues": len(duplicate_trucks) + len(duplicate_bins),
+            "routes": [
+                {
+                    "id": route.id,
+                    "truck_id": route.truck_id,
+                    "bin_count": len(route.bin_ids),
+                    "status": route.status,
+                    "created_at": route.created_at.isoformat() if route.created_at else None
+                }
+                for route in supervisor.system_state.active_routes
+            ],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Diagnostics error: {str(e)}"
         )
 
 @app.get("/api/routes/status", tags=["Operations"])
